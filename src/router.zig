@@ -1,6 +1,7 @@
 const std = @import("std");
 const Request = @import("request.zig").Request;
 const Context = @import("context.zig").Context;
+const json = @import("extractors/json.zig");
 
 pub fn Router(comptime State: type) type {
     return struct {
@@ -28,9 +29,15 @@ pub fn Router(comptime State: type) type {
 
                         var params: @Tuple(&func_param_types) = undefined;
 
-                        inline for (func_param_types, 0..) |param_type, i| {
-                            if (param_type == Context(State)) params[i] = ctx;
-                            if (param_type == Request) params[i] = req;
+                        inline for (func_param_types, 0..func_params.len) |param_type, i| {
+                            if (param_type == Context(State)) {
+                                params[i] = ctx;
+                            } else if (param_type == Request) {
+                                params[i] = req;
+                            } else if (json.isJsonParameter(param_type)) {
+                                const JsonType = json.getJsonParameter(param_type);
+                                params[i] = try json.extractJson(JsonType, &req);
+                            }
                         }
 
                         const fun: HandlerFunction = @ptrCast(@alignCast(ptr));
@@ -87,6 +94,18 @@ pub fn Router(comptime State: type) type {
 
         pub fn post(self: *Self, path: []const u8, handler: anytype) !void {
             try self.addRoute(.POST, path, makeHandler(handler));
+        }
+
+        pub fn put(self: *Self, path: []const u8, handler: anytype) !void {
+            try self.addRoute(.PUT, path, makeHandler(handler));
+        }
+
+        pub fn delete(self: *Self, path: []const u8, handler: anytype) !void {
+            try self.addRoute(.DELETE, path, makeHandler(handler));
+        }
+
+        pub fn patch(self: *Self, path: []const u8, handler: anytype) !void {
+            try self.addRoute(.PATCH, path, makeHandler(handler));
         }
 
         fn makeHandler(handler: anytype) Handler {

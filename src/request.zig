@@ -24,35 +24,7 @@ pub const Request = struct {
         return null;
     }
 
-    pub fn body_as_json(self: *const @This(), comptime T: type) !std.json.Parsed(T) {
-        if (self.http_req.head.content_length == null) return error.BodyLengthUnknown;
-        if (self.http_req.head.content_type) |content_type| {
-            if (!std.ascii.eqlIgnoreCase(content_type, "application/json")) return error.UnsupportedContentType;
-        }
-
-        if (self.http_req.head.method != .POST and
-            self.http_req.head.method != .PUT and
-            self.http_req.head.method != .PATCH)
-        {
-            return error.MethodNotAllowed;
-        }
-
-        const transfer_buffer = try self.allocator.alloc(u8, self.http_req.head.content_length.?);
-        defer self.allocator.free(transfer_buffer);
-
-        const reader = self.http_req.server.reader.bodyReader(
-            transfer_buffer,
-            self.http_req.head.transfer_encoding,
-            self.http_req.head.content_length,
-        );
-
-        const data = try reader.readAlloc(self.allocator, self.http_req.head.content_length.?);
-        defer self.allocator.free(data);
-
-        return try std.json.parseFromSlice(T, self.allocator, data, .{});
-    }
-
-    pub fn upgradeWebsocket(self: *const @This()) !WebSocket {
+    pub fn upgradeWebsocket(self: @This()) !WebSocket {
         const upg = self.http_req.upgradeRequested();
         switch (upg) {
             .websocket => |key| {
@@ -64,6 +36,7 @@ pub const Request = struct {
             },
             else => {},
         }
+
         return error.NotWebSocketRequest;
     }
 };
