@@ -1,59 +1,75 @@
-const Request = @import("../request.zig").Request;
 const std = @import("std");
+const Request = std.http.Server.Request;
+const StructField = std.builtin.Type.StructField;
+const utils = @import("utils.zig");
 
-pub fn Json(comptime T: type) type {
-    return struct {
-        value: *T,
-    };
+const JSON_EXTRACTOR_KEY: []const u8 = "JSON_EXTRACTOR";
+
+pub fn matches(comptime T: type) bool {
+    return utils.matches(T, JSON_EXTRACTOR_KEY);
 }
 
-pub fn isJsonParameter(comptime T: type) bool {
-    const t = @typeInfo(T);
-    _ = std.mem.find(u8, @typeName(T), "Json(") orelse return false;
-    return t == .@"struct" and @hasField(T, "value");
-}
-
-pub fn getJsonParameter(comptime T: type) type {
+pub fn getExtractedType(comptime T: type) type {
     for (@typeInfo(T).@"struct".fields) |field| {
         if (std.mem.eql(u8, field.name, "value")) {
-            return @typeInfo(field.type).pointer.child;
+            return @typeInfo(@typeInfo(field.type).error_union.payload).pointer.child;
         }
     }
 
     @compileError("No 'value' field found in Json struct");
 }
 
-pub fn extractJson(comptime T: type, req: *const Request) !Json(T) {
-    if (!req.http_req.head.method.requestHasBody()) {
-        return error.RequestBodyMissing;
-    }
+pub fn Json(comptime T: type) type {
+    return struct {
+        const Self = @This();
 
-    const data = try req.allocator.alloc(u8, req.http_req.head.content_length.?);
-    defer req.allocator.free(data);
+        key: []const u8 = JSON_EXTRACTOR_KEY,
+        value: anyerror!*T,
 
-    const reader = req.http_req.server.reader.bodyReader(
-        data,
-        req.http_req.head.transfer_encoding,
-        req.http_req.head.content_length,
-    );
+        pub fn extract(allocator: std.mem.Allocator, req: *Request) Self {
+            if (!req.head.method.requestHasBody()) {
+                return .{ .value = error.RequestBodyMissing };
+            }
 
-    try reader.readSliceAll(data);
-    const parsed = try std.json.parseFromSlice(T, req.allocator, data, .{});
-    defer parsed.deinit();
+            const data = allocator.alloc(u8, req.head.content_length.?) catch |err|
+                return .{ .value = err };
+            defer allocator.free(data);
 
-    const v = try req.allocator.create(T);
-    errdefer req.allocator.destroy(v);
+            const reader = req.server.reader.bodyReader(
+                data,
+                req.head.transfer_encoding,
+                req.head.content_length,
+            );
+            reader.readSliceAll(data) catch |err| return .{ .value = err };
+            const parsed = std.json.parseFromSlice(T, allocator, data, .{}) catch |err| return .{ .value = err };
+            defer parsed.deinit();
 
-    v.* = parsed.value;
-    inline for (@typeInfo(T).@"struct".fields) |field| {
-        if (field.type == []const u8) {
-            const original_slice = @field(parsed.value, field.name);
-            @field(v.*, field.name) = try req.allocator.dupe(u8, original_slice);
+            const value = allocator.create(T) catch |err| return .{ .value = err };
+            errdefer allocator.destroy(value);
+
+            value.* = parsed.value;
+            inline for (@typeInfo(T).@"struct".fields) |field| {
+                if (field.type == []const u8) {
+                    const original_slice = @field(parsed.value, field.name);
+                    @field(value.*, field.name) = allocator.dupe(u8, original_slice) catch |err| return .{ .value = err };
+                }
+            }
+
+            return .{
+                .value = value,
+            };
         }
-    }
 
-    return .{
-        .value = v,
+        pub fn deinit(self: Self, allocator: std.mem.Allocator) void {
+            const value = self.value catch return;
+            inline for (@typeInfo(T).@"struct".fields) |field| {
+                if (field.type == []const u8) {
+                    allocator.free(@field(value.*, field.name));
+                }
+            }
+
+            allocator.destroy(value);
+        }
     };
 }
 
@@ -79,15 +95,29 @@ test "extract Json" {
 
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
-    const req: Request = .{
-        .allocator = allocator,
-        .http_req = &http_req,
-    };
 
-    const json = try extractJson(Person, &req);
-    defer json.deinit();
+    const json = Json(Person).extract(allocator, &http_req);
+    defer json.deinit(allocator);
 
-    const person = json.value;
+    const person = try json.value;
     try std.testing.expectEqual(@as(u7, 15), person.age);
     try std.testing.expectEqualStrings("Ziggy", person.name);
+}
+
+test "matches returns true for Json extractor" {
+    const Person = struct {
+        name: []const u8,
+        age: u7,
+    };
+
+    try std.testing.expect(comptime matches(Json(Person)));
+}
+
+test "matches returns false for non-Json extractor" {
+    const Person = struct {
+        name: []const u8,
+        age: u7,
+    };
+
+    try std.testing.expect(!comptime matches(Person));
 }
