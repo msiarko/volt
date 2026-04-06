@@ -1,3 +1,9 @@
+//! HTTP Server implementation for the Volt web library.
+//!
+//! This module provides a generic HTTP server that can handle requests asynchronously
+//! and route them through a configured router. The server supports WebSocket upgrades
+//! and provides a context for request handling.
+
 const std = @import("std");
 const HttpStatus = std.http.Status;
 const HttpRequst = std.http.Server.Request;
@@ -9,16 +15,43 @@ pub const Context = @import("context.zig").Context;
 const response = @import("response.zig");
 pub const Response = response.Response;
 
+/// Creates a generic HTTP server type parameterized by application state.
+///
+/// The State type parameter allows applications to maintain shared state across
+/// all request handlers. This state is passed to route handlers and can contain
+/// databases, configuration, caches, or any other shared resources.
+///
+/// Example:
+/// ```zig
+/// const MyState = struct {
+///     database: Database,
+///     config: Config,
+/// };
+///
+/// const MyServer = Server(MyState);
+/// ```
 pub fn Server(comptime State: type) type {
     return struct {
         const Self = @This();
         const Router = ServerRouter(State);
 
+        /// The HTTP router that handles request routing and handler execution
         router: Router,
+        /// I/O interface for network operations
         io: std.Io,
+        /// Global allocator for server-wide allocations
         allocator: std.mem.Allocator,
+        /// Application-specific shared state
         state: State,
 
+        /// Initializes a new HTTP server instance.
+        ///
+        /// Parameters:
+        /// - `allocator`: Global allocator for server operations
+        /// - `io`: I/O interface for network operations
+        /// - `state`: Initial application state
+        ///
+        /// Returns: A new Server instance ready to listen for connections
         pub fn init(allocator: std.mem.Allocator, io: std.Io, state: State) !Self {
             return .{
                 .router = .init(allocator),
@@ -28,10 +61,25 @@ pub fn Server(comptime State: type) type {
             };
         }
 
+        /// Cleans up server resources.
+        ///
+        /// This method should be called when the server is no longer needed
+        /// to free any allocated resources, particularly the router.
         pub fn deinit(self: *Self) void {
             self.router.deinit();
         }
 
+        /// Starts listening for HTTP connections on the specified address.
+        ///
+        /// This method runs an event loop that accepts incoming connections
+        /// and processes them asynchronously. Each connection is handled in
+        /// a separate async task.
+        ///
+        /// Parameters:
+        /// - `address`: Network address to bind to (IP and port)
+        /// - `options`: Listen options for the server socket
+        ///
+        /// The server will continue running until interrupted or an error occurs.
         pub fn listen(self: *Self, address: IpAddress, options: ListenOptions) !void {
             var server = try IpAddress.listen(
                 &address,
@@ -85,8 +133,8 @@ pub fn Server(comptime State: type) type {
                 const req_allocator = arena.allocator();
                 const ctx: Context = .{
                     .io = server.io,
-                    .gpa = server.allocator,
-                    .arena = req_allocator,
+                    .server_allocator = server.allocator,
+                    .request_allocator = req_allocator,
                 };
 
                 handleRequest(&server.router, ctx, &server.state, &req) catch |err| {

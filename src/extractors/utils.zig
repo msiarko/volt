@@ -1,6 +1,42 @@
+//! Utility functions for extractor type identification.
+//!
+//! This module provides compile-time utilities for identifying extractor types
+//! through structural reflection. Extractors use a "key" field with a default
+//! value to identify themselves, allowing the router to automatically detect
+//! and handle different parameter types.
+
 const std = @import("std");
 const StructField = std.builtin.Type.StructField;
 
+/// Checks if a type is a specific extractor by examining its structure.
+///
+/// This function performs compile-time reflection to determine if the given
+/// type has a field named "key" with a default value that matches the provided
+/// extractor key. This pattern allows extractors to be identified automatically
+/// by the router's parameter injection system.
+///
+/// Parameters:
+/// - `T`: The type to check for extractor identification
+/// - `extractor_key`: The key value that identifies the extractor type
+///
+/// Returns: true if T has a "key" field with the matching default value
+///
+/// Example usage:
+/// ```zig
+/// const MyExtractor = struct {
+///     key: []const u8 = "MY_EXTRACTOR",
+///     // ... other fields
+/// };
+///
+/// // Check if a type is the MyExtractor
+/// const isMyExtractor = comptime matches(MyExtractor, "MY_EXTRACTOR"); // true
+///
+/// const OtherType = struct { name: []const u8 };
+/// const isOther = comptime matches(OtherType, "MY_EXTRACTOR"); // false
+/// ```
+///
+/// This is used internally by extractors like WebSocket and JSON to enable
+/// automatic parameter detection in route handlers.
 pub fn matches(comptime T: type, comptime extractor_key: []const u8) bool {
     const t = @typeInfo(T);
     for (t.@"struct".fields) |field| {
