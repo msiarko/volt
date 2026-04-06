@@ -16,17 +16,7 @@ A modern, type-safe web library for Zig with automatic parameter injection and W
 
 Add volt as a dependency in your `build.zig.zon`:
 
-```zig
-.dependencies = .{
-    .volt = .{
-        .url = "https://github.com/yourusername/volt/archive/main.tar.gz",
-        // Or use a local path for development:
-        .path = "../path/to/volt",
-    },
-},
-```
-
-> Alternatively, you can use `zig fetch` to download the library directly into your project.
+Use `zig fetch --save "git+https://github.com/MikhailSiarko/volt#v0.0.1"` to download the library directly into your project.
 
 > **Note**: Volt requires a **nightly version of Zig** (0.16.0-dev or later). Stable releases are not currently supported.
 
