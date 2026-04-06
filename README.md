@@ -180,7 +180,7 @@ pub fn main(init: std.process.Init) !void {
 
 fn indexHandler(ctx: volt.Context, state: *AppState) !volt.Response {
     _ = state;
-    // Any unhadled error will be handled by library as an Internal Server Error response
+    // Any unhandled error will be handled by library as Internal Server Error response
     // with the name of the error in the response body
     // If you want to send a specific response, handle error with the catch block
     return .text(ctx.request_allocator, .ok, "Hello from Volt!", null);
