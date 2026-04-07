@@ -15,6 +15,13 @@ const utils = @import("utils.zig");
 /// Key used to identify WebSocket extractor types at compile time.
 const WS_EXTRACTOR_KEY: []const u8 = "WS_EXTRACTOR";
 
+pub const WebSocketError = error{
+    WebSocketUpgradeFailed,
+    WebSocketKeyMissing,
+    NotWebSocketUpgrade,
+    WebSocketHandlerFailed,
+};
+
 /// Checks if a type is a WebSocket extractor by examining its structure.
 ///
 /// This function uses compile-time reflection to determine if the given type
@@ -41,10 +48,23 @@ pub fn matches(comptime T: type) bool {
 ///
 /// Returns: WebSocket extractor instance
 ///
-/// The returned WebSocket can be used with onUpgrade() to handle
+/// The returned WebSocket can be used with onConnected() to handle
 /// the actual WebSocket handshake and connection.
 pub fn extract(req: *Request) WebSocket {
-    return .{ .req = req };
+    const upg = req.upgradeRequested();
+    return switch (upg) {
+        .websocket => |key| {
+            if (key) |k| {
+                var ws = req.respondWebSocket(.{ .key = k }) catch return .{ .socket = WebSocketError.WebSocketUpgradeFailed };
+                ws.flush() catch return .{ .socket = WebSocketError.WebSocketUpgradeFailed };
+                defer ws.flush() catch {};
+                return .{ .socket = ws };
+            }
+
+            return .{ .socket = WebSocketError.WebSocketKeyMissing };
+        },
+        else => return .{ .socket = WebSocketError.NotWebSocketUpgrade },
+    };
 }
 
 /// WebSocket extractor and upgrade handler.
@@ -66,8 +86,8 @@ pub const WebSocket = struct {
 
     /// Extractor key for type identification
     key: []const u8 = WS_EXTRACTOR_KEY,
-    /// The underlying HTTP request
-    req: *Request,
+    /// The underlying WebSocket connection
+    socket: WebSocketError!Socket,
 
     fn getParamsTypes(comptime params_len: usize, comptime args_fields: []const StructField) []const type {
         comptime var params: [params_len]type = undefined;
@@ -102,9 +122,9 @@ pub const WebSocket = struct {
     ///     try ws.writeMessage(.{ .text = try std.fmt.allocPrint(ctx.request_allocator, "Hello {s}!", .{name}) });
     /// }
     ///
-    /// try ws.onUpgrade(handleConnection, .{"Alice"});
+    /// try ws.onConnected(handleConnection, .{"Alice"});
     /// ```
-    pub fn onUpgrade(self: *const Self, handler: anytype, args: anytype) !void {
+    pub fn onConnected(self: *const Self, handler: anytype, args: anytype) !void {
         const Args = @TypeOf(args);
         const args_type_info = @typeInfo(Args);
         if (args_type_info != .@"struct" and !args_type_info.@"struct".is_tuple) {
@@ -120,26 +140,17 @@ pub const WebSocket = struct {
         const handler_params_len = handler_type_info.@"fn".params.len;
         const args_fileds = args_type_info.@"struct".fields;
         const params = comptime getParamsTypes(handler_params_len, args_fileds);
-        const upg = self.req.upgradeRequested();
-        switch (upg) {
-            .websocket => |key| {
-                if (key) |k| {
-                    var ws = try self.req.respondWebSocket(.{ .key = k });
-                    try ws.flush();
-                    defer ws.flush() catch {};
-                    var new_args: @Tuple(params) = undefined;
-                    inline for (0..params.len) |i| {
-                        if (i == params.len - 1) {
-                            new_args[i] = &ws;
-                        } else {
-                            new_args[i] = args[i];
-                        }
-                    }
-                    @call(.always_inline, handler, new_args) catch return error.WebSocketHandlerFailed;
-                }
-            },
-            else => return error.NotWebSocketUpgrade,
+        var new_args: @Tuple(params) = undefined;
+        inline for (0..params.len) |i| {
+            if (i == params.len - 1) {
+                var socket = try self.socket;
+                new_args[i] = &socket;
+            } else {
+                new_args[i] = args[i];
+            }
         }
+
+        @call(.always_inline, handler, new_args) catch return WebSocketError.WebSocketHandlerFailed;
     }
 
     /// Converts the WebSocket extractor to an HTTP Response.

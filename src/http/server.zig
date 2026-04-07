@@ -6,13 +6,15 @@
 
 const std = @import("std");
 const HttpStatus = std.http.Status;
-const HttpRequst = std.http.Server.Request;
+const HttpRequest = std.http.Server.Request;
 const ServerRouter = @import("router.zig").Router;
 const IpAddress = std.Io.net.IpAddress;
 const ListenOptions = std.Io.net.IpAddress.ListenOptions;
+const response = @import("response.zig");
+const extractors = @import("extractors");
+const utils = @import("utils.zig");
 
 pub const Context = @import("context.zig").Context;
-const response = @import("response.zig");
 pub const Response = response.Response;
 
 /// Creates a generic HTTP server type parameterized by application state.
@@ -144,7 +146,7 @@ pub fn Server(comptime State: type) type {
             }
         }
 
-        fn handleRequest(router: *const Router, ctx: Context, state: *State, req: *HttpRequst) !void {
+        fn handleRequest(router: *const Router, ctx: Context, state: *State, req: *HttpRequest) !void {
             var target = req.head.target;
             if (std.mem.indexOfScalar(u8, target, '?')) |idx| {
                 target = target[0..idx];
@@ -154,8 +156,7 @@ pub fn Server(comptime State: type) type {
             if (router.routes.get(target)) |route_entry| {
                 if (route_entry.handlers.get(method)) |handler| {
                     const res = handler.execute(ctx, state, req) catch |err| {
-                        if (err == error.WebSocketHandlerFailed) return;
-                        if (err == error.NotWebSocketUpgrade) return;
+                        if (utils.isMemberOfErrorSet(extractors.WebSocketError, err)) return;
                         try req.respond(@errorName(err), .{ .status = .internal_server_error });
                         return;
                     };
@@ -168,4 +169,8 @@ pub fn Server(comptime State: type) type {
             }
         }
     };
+}
+
+test {
+    _ = std.testing.refAllDecls(utils);
 }
