@@ -182,3 +182,17 @@ test "matches returns false for non-WebSocket extractor" {
 
     try std.testing.expect(!comptime matches(Person));
 }
+
+test "init returns NotWebSocketUpgrade for regular HTTP request" {
+    const req_bytes = std.fmt.comptimePrint("GET /ws HTTP/1.1\r\n" ++ "\r\n", .{});
+    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+
+    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+    var http_req = try http_server.receiveHead();
+
+    const ws = init(&http_req);
+    try std.testing.expectError(WebSocketError.NotWebSocketUpgrade, ws.socket);
+}

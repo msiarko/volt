@@ -2,7 +2,8 @@
 //!
 //! This module provides the core infrastructure for automatically extracting
 //! parameters from HTTP requests and injecting them into handler functions.
-//! It uses compile-time reflection to identify extractor types (Json, WebSocket, Query)
+//! It uses compile-time reflection to identify extractor types
+//! (Json, WebSocket, Query, TypedQuery)
 //! and pass the appropriate values to handlers.
 
 const std = @import("std");
@@ -13,11 +14,13 @@ const Context = http.Context;
 const json = @import("json.zig");
 const web_socket = @import("web_socket.zig");
 const query = @import("query.zig");
+const typed_query = @import("typed_query.zig");
 
 pub const Json = json.Json;
 pub const WebSocket = web_socket.WebSocket;
 pub const WebSocketError = web_socket.WebSocketError;
 pub const Query = query.Query;
+pub const TypedQuery = typed_query.TypedQuery;
 
 fn getParamsTypes(func_params: []const Param) []const type {
     comptime var func_param_types: [func_params.len]type = undefined;
@@ -52,7 +55,7 @@ fn funcParams(comptime T: type) []const Param {
 /// This function uses compile-time reflection to examine a handler function's
 /// parameters and populate them with values from the provided context, state,
 /// and request. It automatically detects and handles special types like Json and
-/// WebSocket and Query through their respective extractors.
+/// WebSocket and Query and TypedQuery through their respective extractors.
 ///
 /// Parameters:
 /// - `Func`: The handler function type to extract parameters for
@@ -93,6 +96,9 @@ pub inline fn resolveParams(comptime Func: type, comptime Values: type, values: 
         } else if (comptime query.matches(param_type)) {
             const param_name = comptime query.getParamName(param_type);
             params[i] = query.Query(param_name).init(req);
+        } else if (comptime typed_query.matches(param_type)) {
+            const ExtractedType = typed_query.Extracted(param_type);
+            params[i] = typed_query.TypedQuery(ExtractedType).init(ctx.request_allocator, req);
         } else {
             @compileError("unable to resolve parameter of type " ++ @typeName(param_type));
         }
@@ -111,4 +117,8 @@ test {
 
 test {
     _ = std.testing.refAllDecls(query);
+}
+
+test {
+    _ = std.testing.refAllDecls(typed_query);
 }

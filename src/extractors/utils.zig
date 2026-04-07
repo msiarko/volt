@@ -63,3 +63,9 @@ test "matches returns false for non-matching type" {
 
     try testing.expect(!result);
 }
+
+test "matches returns false when key has no default value" {
+    const result = comptime matches(struct { key: []const u8 }, "WS_EXTRACTOR");
+
+    try testing.expect(!result);
+}

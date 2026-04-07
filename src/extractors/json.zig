@@ -349,6 +349,15 @@ test "matches returns true for Json extractor" {
     try std.testing.expect(comptime matches(Json(Person)));
 }
 
+test "Extracted returns payload type for Json extractor" {
+    const Person = struct {
+        name: []const u8,
+        age: u7,
+    };
+
+    try std.testing.expect(comptime Extracted(Json(Person)) == Person);
+}
+
 test "matches returns false for non-Json extractor" {
     const Person = struct {
         name: []const u8,

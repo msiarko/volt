@@ -83,6 +83,23 @@ pub fn Query(comptime name: []const u8) type {
     };
 }
 
+test "matches returns true for Query extractor" {
+    try std.testing.expect(comptime matches(Query("name")));
+}
+
+test "matches returns false for non-Query extractor" {
+    const Person = struct {
+        name: []const u8,
+        age: u8,
+    };
+
+    try std.testing.expect(!comptime matches(Person));
+}
+
+test "getParamName returns configured query name" {
+    try std.testing.expectEqualStrings("name", comptime getParamName(Query("name")));
+}
+
 test "init returns Query with value when query parameter is present" {
     const req_bytes = std.fmt.comptimePrint("GET /person?name=Ziggy HTTP/1.1\r\n" ++ "\r\n", .{});
     var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
@@ -132,6 +149,21 @@ test "init returns Query without value when query parameter is not present" {
 
 test "init returns Query without value when query parameter is present but has no value" {
     const req_bytes = std.fmt.comptimePrint("GET /person?name=&age=30 HTTP/1.1\r\n" ++ "\r\n", .{});
+    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+
+    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+    var http_req = try http_server.receiveHead();
+
+    const query = Query("name").init(&http_req);
+
+    try std.testing.expectEqual(null, query.value);
+}
+
+test "init returns Query without value when query string is missing" {
+    const req_bytes = std.fmt.comptimePrint("GET /person HTTP/1.1\r\n" ++ "\r\n", .{});
     var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
 
     var write_buffer: [4096]u8 = undefined;

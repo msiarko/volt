@@ -7,8 +7,7 @@ A modern, type-safe web library for Zig with automatic parameter injection and W
 - ✨ **Designed for usability**: Clear abstractions and automatic parameter handling
 - 🔒 **Type Safe**: Compile-time parameter validation and injection
 - 🌐 **WebSocket Support**: Seamless WebSocket upgrade handling
-- 📦 **JSON Extraction**: Automatic JSON deserialization from request bodies
-- 🔎 **Query Extraction**: Automatic URL query parameter extraction
+- 🧰 **Reques Data Extraction**: Built-in extractors for request data and protocol upgrades
 - 🛣️ **Router**: Flexible routing with HTTP method support
 - ⚡ **Async**: Built-in asynchronous request handling
 - 🧠 **Memory Safe**: Request-scoped and server-scoped allocators for safer memory handling
@@ -69,6 +68,13 @@ try server.router.patch("/users", &patchUser);
 
 Volt automatically extracts parameters from HTTP requests using compile-time reflection:
 
+## Supported Extractors
+
+- **Json(T)**: Parses request body JSON into typed structs.
+- **Query("name")**: Extracts a single query parameter by key.
+- **TypedQuery(T)**: Maps query parameters into a typed filter struct (`?[]const u8` fields).
+- **WebSocket**: Handles WebSocket upgrade requests and connection handoff.
+
 ### JSON Body Parsing
 
 ```zig
@@ -124,6 +130,35 @@ fn findUser(
     }
 
     return volt.Response.text(ctx.request_allocator, .bad_request, "Missing query parameter: id", null);
+}
+```
+
+### Typed Query Extraction
+
+```zig
+const UserFilters = struct {
+    name: ?[]const u8,
+    role: ?[]const u8,
+    active: ?[]const u8,
+};
+
+fn listUsers(
+    ctx: volt.Context,
+    state: *AppState,
+    filters_query: volt.TypedQuery(UserFilters)
+) !volt.Response {
+    _ = state;
+
+    var filters = filters_query;
+    defer filters.deinit(ctx.request_allocator);
+
+    if (try filters.value) |f| {
+        if (f.name) |name| {
+            return volt.Response.text(ctx.request_allocator, .ok, name, null);
+        }
+    }
+
+    return volt.Response.text(ctx.request_allocator, .ok, "No filters provided", null);
 }
 ```
 
@@ -282,7 +317,7 @@ Volt is built around several key components:
 - **Server**: Generic HTTP server with async request handling
 - **Router**: Type-safe routing with automatic parameter injection
 - **Context**: Request execution context with I/O and memory resources
-- **Extractors**: Automatic parameter extraction (JSON, WebSocket, Query)
+- **Extractors**: Automatic parameter extraction (JSON, WebSocket, Query, TypedQuery)
 - **Response**: Unified response type for HTTP and WebSocket responses
 
 ## Status & Roadmap
@@ -299,6 +334,8 @@ This is an early-stage library. While the core routing and WebSocket functionali
   - Header extraction
   - Route parameter extraction
   - Form data extraction
+
+- **Feature Flags**: Build-time feature flags in `build.zig` to include only selected features and reduce final binary size when unused features are disabled.
 
 - **SSL/TLS Support**: Secure HTTPS connections
 
