@@ -29,30 +29,31 @@ pub fn matches(comptime T: type) bool {
     return utils.matches(T, JSON_EXTRACTOR_KEY);
 }
 
-/// Extracts the underlying data type from a Json(T) wrapper type.
+/// Extracts the payload type from a Json extractor type.
 ///
-/// This function performs compile-time reflection to find the "value" field
-/// in a Json struct and returns the type it points to.
+/// This function performs compile-time reflection to locate the `value` field
+/// on the extractor and unwraps its type shape (`anyerror!*U`) to return `U`.
 ///
 /// Parameters:
-/// - `T`: A Json(T) type (must have a "value" field)
+/// - `T`: A Json(U) extractor type (must define a `value` field)
 ///
-/// Returns: The underlying data type T
+/// Returns: The extracted payload type `U`
 ///
 /// Example:
 /// ```zig
 /// const Person = struct { name: []const u8, age: u32 };
-/// const JsonPerson = Json(Person);
-/// const ExtractedType = getExtractedType(JsonPerson); // Person
+/// const ExtractedType = Extracted(Json(Person)); // Person
 /// ```
-pub fn getExtractedType(comptime T: type) type {
-    for (@typeInfo(T).@"struct".fields) |field| {
+pub fn Extracted(comptime T: type) type {
+    if (!matches(T)) {
+        @compileError("Type is not a Json extractor");
+    }
+
+    inline for (@typeInfo(T).@"struct".fields) |field| {
         if (std.mem.eql(u8, field.name, "value")) {
             return @typeInfo(@typeInfo(field.type).error_union.payload).pointer.child;
         }
     }
-
-    @compileError("No 'value' field found in Json struct");
 }
 
 /// Creates a JSON extractor type for automatic deserialization.

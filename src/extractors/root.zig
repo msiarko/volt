@@ -84,8 +84,7 @@ pub inline fn resolveParams(comptime Func: type, comptime Values: type, values: 
         if (comptime getFieldName(param_type, Values)) |n| {
             params[i] = @field(values, n);
         } else if (comptime json.matches(param_type)) {
-            const Extracted = json.getExtractedType(param_type);
-            params[i] = json.Json(Extracted).extract(ctx.request_allocator, req);
+            params[i] = json.Json(json.Extracted(param_type)).extract(ctx.request_allocator, req);
         } else if (comptime web_socket.matches(param_type)) {
             params[i] = web_socket.extract(req);
         }
