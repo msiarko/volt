@@ -9,9 +9,7 @@ const Request = std.http.Server.Request;
 const Response = @import("response.zig").Response;
 const Server = @import("server.zig").Server;
 const Context = @import("context.zig").Context;
-const ext = @import("extractors");
-const json = ext.json;
-const web_socket = ext.web_socket;
+const extractors = @import("extractors");
 const Param = std.builtin.Type.Fn.Param;
 
 /// Creates a generic HTTP router type parameterized by application state.
@@ -52,56 +50,6 @@ pub fn Router(comptime State: type) type {
             /// Virtual table for execution
             vtable: VTable,
 
-            fn getParamsTypes(func_params: []const Param) []const type {
-                comptime var func_param_types: [func_params.len]type = undefined;
-                inline for (func_params, 0..) |param_type, i| {
-                    func_param_types[i] = param_type.type.?;
-                }
-
-                return &func_param_types;
-            }
-
-            fn getFieldName(comptime T: type, comptime V: type) ?[]const u8 {
-                inline for (@typeInfo(V).@"struct".fields) |f| {
-                    if (f.type == T) return f.name;
-                }
-
-                return null;
-            }
-
-            fn Params(comptime T: type) type {
-                const func_params = funcParams(T);
-                const func_param_types = getParamsTypes(func_params);
-                return @Tuple(func_param_types);
-            }
-
-            fn funcParams(comptime T: type) []const Param {
-                const func_type_info = @typeInfo(T).pointer.child;
-                return @typeInfo(func_type_info).@"fn".params;
-            }
-
-            fn resolveParams(comptime Func: type, comptime Values: type, values: Values, req: *Request) Params(Func) {
-                const func_params = comptime funcParams(Func);
-                const func_param_types = comptime getParamsTypes(func_params);
-                var params: Params(Func) = undefined;
-                const ctx_name = comptime getFieldName(Context, Values) orelse
-                    @compileError("no context field found in values");
-
-                const ctx: Context = @field(values, ctx_name);
-                inline for (func_param_types, 0..func_params.len) |param_type, i| {
-                    if (comptime getFieldName(param_type, Values)) |n| {
-                        params[i] = @field(values, n);
-                    } else if (comptime json.matches(param_type)) {
-                        const Extracted = json.getExtractedType(param_type);
-                        params[i] = json.Json(Extracted).extract(ctx.request_allocator, req);
-                    } else if (comptime web_socket.matches(param_type)) {
-                        params[i] = web_socket.extract(req);
-                    }
-                }
-
-                return params;
-            }
-
             /// Creates a new Handler instance from a function pointer.
             ///
             /// Parameters:
@@ -113,7 +61,7 @@ pub fn Router(comptime State: type) type {
                 const impl = struct {
                     fn exec(ptr: *const anyopaque, ctx: Context, state: *State, req: *Request) !Response {
                         const values = .{ ctx, state };
-                        const params = resolveParams(HandlerFunction, @TypeOf(values), values, req);
+                        const params = extractors.resolveParams(HandlerFunction, @TypeOf(values), values, req);
                         const fun: HandlerFunction = @ptrCast(@alignCast(ptr));
                         return @call(.auto, fun, params);
                     }

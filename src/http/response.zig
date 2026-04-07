@@ -7,7 +7,7 @@
 const std = @import("std");
 const HttpStatus = std.http.Status;
 const HttpRequest = std.http.Server.Request;
-const WebSocket = @import("extractors").web_socket.WebSocket;
+const WebSocket = @import("extractors").WebSocket;
 const HttpHeader = std.http.Header;
 
 /// Unified response type that can represent HTTP responses or WebSocket upgrades.
@@ -44,11 +44,7 @@ pub const Response = union(enum) {
             &.{ content_headers, extra_headers orelse &.{} },
         );
         return .{
-            .http = .{
-                .status = status,
-                .content = content,
-                .headers = headers,
-            },
+            .http = .{ .status = status, .content = content, .headers = headers },
         };
     }
 
@@ -65,13 +61,11 @@ pub const Response = union(enum) {
         content: []const u8,
         extra_headers: ?[]const HttpHeader,
     ) !Self {
-        return into_http_response(
-            arena,
-            .internal_server_error,
-            content,
-            &.{},
-            extra_headers,
-        );
+        if (isJson(arena, content)) {
+            return json(arena, .internal_server_error, content, extra_headers);
+        }
+
+        return text(arena, .internal_server_error, content, extra_headers);
     }
 
     /// Creates a JSON response with appropriate Content-Type header.
@@ -98,13 +92,7 @@ pub const Response = union(enum) {
             .{ .name = "Content-Type", .value = "application/json" },
         };
 
-        return into_http_response(
-            arena,
-            status,
-            content,
-            content_headers,
-            extra_headers,
-        );
+        return into_http_response(arena, status, content, content_headers, extra_headers);
     }
 
     /// Creates a plain text response with appropriate Content-Type header.
@@ -131,13 +119,63 @@ pub const Response = union(enum) {
             .{ .name = "Content-Type", .value = "text/plain" },
         };
 
-        return into_http_response(
-            arena,
-            status,
-            content,
-            content_headers,
-            extra_headers,
-        );
+        return into_http_response(arena, status, content, content_headers, extra_headers);
+    }
+
+    /// Creates a 200 OK response with optional content.
+    ///
+    /// Parameters:
+    /// - `arena`: Allocator for response construction
+    /// - `content`: Response body content, or null for empty body
+    /// - `extra_headers`: Optional additional headers
+    ///
+    /// Returns: HTTP 200 OK response
+    ///
+    /// Example:
+    /// ```zig
+    /// return Response.ok(arena, "Operation successful", null);
+    /// ```
+    pub fn ok(arena: std.mem.Allocator, content: ?[]const u8, extra_headers: ?[]const HttpHeader) !Self {
+        if (content) |c| {
+            if (isJson(arena, c)) {
+                return json(arena, .ok, c, extra_headers);
+            }
+
+            return text(arena, .ok, c, extra_headers);
+        }
+
+        return into_http_response(arena, .ok, &.{}, &.{}, extra_headers);
+    }
+
+    /// Creates an HTML response with appropriate Content-Type header.
+    ///
+    /// Parameters:
+    /// - `arena`: Allocator for response construction
+    /// - `status`: HTTP status code
+    /// - `content`: HTML content
+    /// - `extra_headers`: Optional additional headers
+    ///
+    /// Returns: HTTP response with HTML content type
+    ///
+    /// Example:
+    /// ```zig
+    /// return Response.html(arena, .ok, "<h1>Welcome</h1>", null);
+    /// ```
+    pub fn html(
+        arena: std.mem.Allocator,
+        status: HttpStatus,
+        content: []const u8,
+        extra_headers: ?[]const HttpHeader,
+    ) !Self {
+        const content_headers: []const HttpHeader = &.{
+            .{ .name = "Content-Type", .value = "text/html" },
+        };
+
+        return into_http_response(arena, status, content, content_headers, extra_headers);
+    }
+
+    fn isJson(arena: std.mem.Allocator, content: []const u8) bool {
+        return std.json.validate(arena, content) catch false;
     }
 };
 

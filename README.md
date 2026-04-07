@@ -16,7 +16,7 @@ A modern, type-safe web library for Zig with automatic parameter injection and W
 
 Add volt as a dependency in your `build.zig.zon`:
 
-Use `zig fetch --save "git+https://github.com/msiarko/volt#v0.0.1"` to download the library directly into your project.
+Use `zig fetch --save "git+https://github.com/msiarko/volt#{branch or tag}"` to download the library directly into your project.
 
 > **Note**: Volt requires a **nightly version of Zig** (0.16.0-dev or later). Stable releases are not currently supported.
 
@@ -98,7 +98,7 @@ fn websocketHandler(
     state: *AppState,
     ws: volt.WebSocket
 ) !volt.Response {
-    try ws.onUpgrade(handleConnection, .{ctx, state});
+    try ws.onConnected(handleConnection, .{ctx, state});
     return ws.intoResponse();
 }
 
@@ -150,7 +150,7 @@ fn myHandler(ctx: volt.Context, state: *AppState) !volt.Response {
     defer state.mutex.unlock(ctx.io);
 
     // Use state.database, state.cache, etc.
-    return volt.Response.ok();
+    return volt.Response.text(ctx.request_allocator, .ok, "Success", null);
 }
 ```
 
@@ -180,17 +180,11 @@ pub fn main(init: std.process.Init) !void {
 
 fn indexHandler(ctx: volt.Context, state: *AppState) !volt.Response {
     _ = state;
-    // Any unhandled error will be handled by library as Internal Server Error response
-    // with the name of the error in the response body
-    // If you want to send a specific response, handle error with the catch block
     return .text(ctx.request_allocator, .ok, "Hello from Volt!", null);
 }
 
 fn echoHandler(ctx: volt.Context, state: *AppState, body: volt.Json(EchoRequest)) !volt.Response {
     _ = state;
-    // try on json's value here is required, since Json(T).value is 'anyerror!*T'.
-    // This gives you the control of how to handle the request in case of parsing error
-    // Value is allocated using ctx.request_allocator and auromatically freed after request is finished
     const request = try body.value;
     defer body.deinit(ctx.request_allocator);
     return .text(ctx.request_allocator, .ok, request.message, null);
@@ -223,7 +217,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn webSocketHandler(ctx: volt.Context, state: *AppState, ws: volt.WebSocket) !volt.Response {
-    try ws.onUpgrade(handleConnection, .{ ctx, state });
+    try ws.onConnected(handleConnection, .{ ctx, state });
     return ws.intoResponse();
 }
 
@@ -247,8 +241,8 @@ fn handleConnection(ctx: volt.Context, state: *AppState, socket: *std.http.Serve
 
 Volt uses a two-tier memory management system:
 
-    // Use ctx.request_allocator for temporary parsing, string manipulation, and response construction.
-- **Server Allocator** (`ctx.server_allocator`): Long-lived allocations. Use for data that persists beyond the current request.
+- **Request Allocator** (`ctx.request_allocator`): Temporary allocations for parsing, string manipulation, and response construction. Automatically freed after the request completes.
+- **Server Allocator** (`ctx.server_allocator`): Long-lived allocations for data that persists beyond the current request.
 
 ```zig
 fn myHandler(ctx: volt.Context, state: *AppState) !volt.Response {
@@ -258,7 +252,7 @@ fn myHandler(ctx: volt.Context, state: *AppState) !volt.Response {
     // Use server_allocator for persistent data
     const persistent_data = try ctx.server_allocator.dupe(u8, some_data);
 
-    return volt.Response.ok();
+    return volt.Response.text(ctx.request_allocator, .ok, "Success", null);
 }
 ```
 
