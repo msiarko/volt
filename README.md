@@ -7,7 +7,7 @@ A modern, type-safe web library for Zig with automatic parameter injection and W
 - ✨ **Designed for usability**: Clear abstractions and automatic parameter handling
 - 🔒 **Type Safe**: Compile-time parameter validation and injection
 - 🌐 **WebSocket Support**: Seamless WebSocket upgrade handling
-- 🧰 **Reques Data Extraction**: Built-in extractors for request data and protocol upgrades
+- 🧰 **Request Data Extraction**: Built-in extract support for request data and protocol upgrades
 - 🛣️ **Router**: Flexible routing with HTTP method support
 - ⚡ **Async**: Built-in asynchronous request handling
 - 🧠 **Memory Safe**: Request-scoped and server-scoped allocators for safer memory handling
@@ -68,7 +68,7 @@ try server.router.patch("/users", &patchUser);
 
 Volt automatically extracts parameters from HTTP requests using compile-time reflection:
 
-## Supported Extractors
+## Supported Extract Types
 
 - **Json(T)**: Parses request body JSON into typed structs.
 - **Query("name")**: Extracts a single query parameter by key.
@@ -106,7 +106,7 @@ fn websocketHandler(
     ws: volt.WebSocket
 ) !volt.Response {
     try ws.onConnected(handleConnection, .{ctx, state});
-    return ws.intoResponse();
+    return volt.webSocketResponse(ws);
 }
 
 fn handleConnection(ctx: volt.Context, state: *AppState, socket: *std.http.Server.WebSocket) !void {
@@ -317,7 +317,7 @@ Volt is built around several key components:
 - **Server**: Generic HTTP server with async request handling
 - **Router**: Type-safe routing with automatic parameter injection
 - **Context**: Request execution context with I/O and memory resources
-- **Extractors**: Automatic parameter extraction (JSON, WebSocket, Query, TypedQuery)
+- **Extract**: Automatic parameter extraction (JSON, WebSocket, Query, TypedQuery)
 - **Response**: Unified response type for HTTP and WebSocket responses
 
 ## Status & Roadmap
@@ -330,7 +330,7 @@ This is an early-stage library. While the core routing and WebSocket functionali
 
 ### Planned Features
 
-- **Additional Extractors**:
+- **Additional Extract Types**:
   - Header extraction
   - Route parameter extraction
   - Form data extraction

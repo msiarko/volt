@@ -10,23 +10,20 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const extractors = b.addModule("extractors", .{
-        .root_source_file = b.path("src/extractors/root.zig"),
+    const extract = b.addModule("extract", .{
+        .root_source_file = b.path("src/extract/root.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{
-            .{ .name = "http", .module = http },
-        },
     });
 
-    http.addImport("extractors", extractors);
+    http.addImport("extract", extract);
 
     const mod = b.addModule("volt", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "extractors", .module = extractors },
+            .{ .name = "extract", .module = extract },
             .{ .name = "http", .module = http },
         },
     });
@@ -36,7 +33,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const extractors_tests = b.addTest(.{
-        .root_module = extractors,
+        .root_module = extract,
     });
 
     const mod_tests = b.addTest(.{

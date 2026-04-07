@@ -7,7 +7,7 @@
 const std = @import("std");
 const HttpStatus = std.http.Status;
 const HttpRequest = std.http.Server.Request;
-const WebSocket = @import("extractors").WebSocket;
+const WebSocket = @import("extract").WebSocket;
 const HttpHeader = std.http.Header;
 
 /// Unified response type that can represent HTTP responses or WebSocket upgrades.
@@ -61,10 +61,6 @@ pub const Response = union(enum) {
         content: []const u8,
         extra_headers: ?[]const HttpHeader,
     ) !Self {
-        if (isJson(arena, content)) {
-            return json(arena, .internal_server_error, content, extra_headers);
-        }
-
         return text(arena, .internal_server_error, content, extra_headers);
     }
 
@@ -137,10 +133,6 @@ pub const Response = union(enum) {
     /// ```
     pub fn ok(arena: std.mem.Allocator, content: ?[]const u8, extra_headers: ?[]const HttpHeader) !Self {
         if (content) |c| {
-            if (isJson(arena, c)) {
-                return json(arena, .ok, c, extra_headers);
-            }
-
             return text(arena, .ok, c, extra_headers);
         }
 
@@ -172,10 +164,6 @@ pub const Response = union(enum) {
         };
 
         return into_http_response(arena, status, content, content_headers, extra_headers);
-    }
-
-    fn isJson(arena: std.mem.Allocator, content: []const u8) bool {
-        return std.json.validate(arena, content) catch false;
     }
 };
 

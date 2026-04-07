@@ -24,10 +24,10 @@ pub fn matches(comptime T: type) bool {
 /// (`anyerror!?*U`) to return `U`.
 ///
 /// Compile errors:
-/// - `Type is not a TypedQuery extractor`: Triggered when `matches(T)` is false
+/// - `expected TypedQuery extractor type`: Triggered when `matches(T)` is false
 pub fn Extracted(comptime T: type) type {
     if (!matches(T)) {
-        @compileError("Type is not a TypedQuery extractor");
+        @compileError("expected TypedQuery extractor type");
     }
 
     inline for (@typeInfo(T).@"struct".fields) |field| {
@@ -76,29 +76,19 @@ pub fn TypedQuery(comptime T: type) type {
                 }
             }
 
-            var start_idx = std.mem.findScalar(u8, req.head.target, '?') orelse return .{ .value = null };
-            if (start_idx == req.head.target.len - 1) {
-                return .{ .value = null };
-            }
-
-            start_idx += 1;
+            var query_it = utils.queryIterator(req.head.target) orelse return .{ .value = null };
             const typed_query = arena.create(T) catch |err| return .{ .value = err };
             inline for (fields) |field| {
                 @field(typed_query.*, field.name) = null;
             }
 
-            var query_params = std.mem.splitScalar(u8, req.head.target[start_idx..], '&');
             var value_set = false;
-            while (query_params.next()) |first_param| {
-                var key_value = std.mem.splitScalar(u8, first_param, '=');
-                const key = key_value.next() orelse continue;
+            while (query_it.next()) |entry| {
                 inline for (fields) |field| {
-                    if (std.mem.eql(u8, key, field.name)) {
-                        if (key_value.next()) |value| {
-                            if (value.len != 0) {
-                                value_set = true;
-                                @field(typed_query.*, field.name) = value;
-                            }
+                    if (std.mem.eql(u8, entry.key, field.name)) {
+                        if (entry.value) |value| {
+                            value_set = true;
+                            @field(typed_query.*, field.name) = value;
                         }
                     }
                 }
@@ -268,4 +258,56 @@ test "init returns null when all matching parameters are empty" {
     defer typed_query.deinit(allocator);
 
     try std.testing.expectEqual(null, try typed_query.value);
+}
+
+test "init table-driven typed query extraction" {
+    const Filters = struct {
+        name: ?[]const u8,
+        age: ?[]const u8,
+    };
+
+    const cases = [_]struct {
+        target: []const u8,
+        expected_name: ?[]const u8,
+        expected_age: ?[]const u8,
+        has_value: bool,
+    }{
+        .{ .target = "/users?name=Ziggy&age=30", .expected_name = "Ziggy", .expected_age = "30", .has_value = true },
+        .{ .target = "/users?name=Ziggy", .expected_name = "Ziggy", .expected_age = null, .has_value = true },
+        .{ .target = "/users?name=&age=", .expected_name = null, .expected_age = null, .has_value = false },
+        .{ .target = "/users", .expected_name = null, .expected_age = null, .has_value = false },
+    };
+
+    inline for (cases) |case| {
+        const req_bytes = std.fmt.comptimePrint("GET {s} HTTP/1.1\r\n\r\n", .{case.target});
+        var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+
+        var write_buffer: [4096]u8 = undefined;
+        var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+
+        var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+        var http_req = try http_server.receiveHead();
+
+        var typed_query = TypedQuery(Filters).init(std.testing.allocator, &http_req);
+        defer typed_query.deinit(std.testing.allocator);
+
+        if (case.has_value) {
+            const filters = (try typed_query.value) orelse unreachable;
+            if (case.expected_name) |expected_name| {
+                try std.testing.expect(filters.name != null);
+                try std.testing.expectEqualStrings(expected_name, filters.name.?);
+            } else {
+                try std.testing.expectEqual(null, filters.name);
+            }
+
+            if (case.expected_age) |expected_age| {
+                try std.testing.expect(filters.age != null);
+                try std.testing.expectEqualStrings(expected_age, filters.age.?);
+            } else {
+                try std.testing.expectEqual(null, filters.age);
+            }
+        } else {
+            try std.testing.expectEqual(null, try typed_query.value);
+        }
+    }
 }

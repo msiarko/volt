@@ -27,7 +27,7 @@ const std = @import("std");
 ///     const persistent_data = try ctx.server_allocator.dupe(u8, some_data);
 ///
 ///     // Use ctx.io for any I/O operations if needed
-///     _ = ctx.io; // Usually handled by extractors/library
+///     _ = ctx.io; // Usually handled by extract/library code
 ///
 ///     return Response.json(ctx.request_allocator, .ok, "success", null);
 /// }

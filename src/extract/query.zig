@@ -24,10 +24,10 @@ pub fn matches(comptime T: type) bool {
 /// Returns the compile-time query parameter name from a Query extractor type.
 ///
 /// Compile errors:
-/// - `Type is not a Query extractor`: Triggered when `matches(T)` is false
+/// - `expected Query extractor type`: Triggered when `matches(T)` is false
 pub fn getParamName(comptime T: type) []const u8 {
     if (!matches(T)) {
-        @compileError("Type is not a Query extractor");
+        @compileError("expected Query extractor type");
     }
 
     inline for (@typeInfo(T).@"struct".fields) |field| {
@@ -61,20 +61,10 @@ pub fn Query(comptime name: []const u8) type {
         /// This method parses the portion of the request URL after `?`, splits
         /// pairs by `&`, and returns the value for the configured key.
         pub fn init(req: *Request) Self {
-            var start_idx = std.mem.findScalar(u8, req.head.target, '?') orelse return .{ .value = null };
-            start_idx += 1;
-            var query_params = std.mem.splitScalar(u8, req.head.target[start_idx..], '&');
-            while (query_params.next()) |first_param| {
-                var key_value = std.mem.splitScalar(u8, first_param, '=');
-                const key = key_value.next() orelse continue;
-                if (std.mem.eql(u8, key, name)) {
-                    if (key_value.next()) |value| {
-                        if (value.len == 0) {
-                            return .{ .value = null };
-                        }
-
-                        return .{ .value = value };
-                    }
+            var query_it = utils.queryIterator(req.head.target) orelse return .{ .value = null };
+            while (query_it.next()) |entry| {
+                if (std.mem.eql(u8, entry.key, name)) {
+                    return .{ .value = entry.value };
                 }
             }
 
@@ -175,4 +165,34 @@ test "init returns Query without value when query string is missing" {
     const query = Query("name").init(&http_req);
 
     try std.testing.expectEqual(null, query.value);
+}
+
+test "init table-driven query extraction" {
+    const cases = [_]struct {
+        target: []const u8,
+        expected: ?[]const u8,
+    }{
+        .{ .target = "/person?name=Ziggy", .expected = "Ziggy" },
+        .{ .target = "/person?name=", .expected = null },
+        .{ .target = "/person?age=30", .expected = null },
+        .{ .target = "/person", .expected = null },
+    };
+
+    inline for (cases) |case| {
+        const req_bytes = std.fmt.comptimePrint("GET {s} HTTP/1.1\r\n\r\n", .{case.target});
+        var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+
+        var write_buffer: [4096]u8 = undefined;
+        var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+
+        var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+        var http_req = try http_server.receiveHead();
+
+        const query = Query("name").init(&http_req);
+        if (case.expected) |expected| {
+            try std.testing.expectEqualStrings(expected, query.value.?);
+        } else {
+            try std.testing.expectEqual(null, query.value);
+        }
+    }
 }

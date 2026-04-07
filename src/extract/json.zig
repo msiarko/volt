@@ -43,7 +43,7 @@ pub fn matches(comptime T: type) bool {
 /// Returns: The extracted payload type `U`
 ///
 /// Compile errors:
-/// - `Type is not a Json extractor`: Triggered when `matches(T)` is false
+/// - `expected Json extractor type`: Triggered when `matches(T)` is false
 ///
 /// Example:
 /// ```zig
@@ -52,7 +52,7 @@ pub fn matches(comptime T: type) bool {
 /// ```
 pub fn Extracted(comptime T: type) type {
     if (!matches(T)) {
-        @compileError("Type is not a Json extractor");
+        @compileError("expected Json extractor type");
     }
 
     inline for (@typeInfo(T).@"struct".fields) |field| {
