@@ -121,7 +121,7 @@ pub fn Json(comptime T: type) type {
         ///
         /// The returned value should be checked for errors and deinit() should
         /// be called when the extracted data is no longer needed.
-        pub fn extract(allocator: std.mem.Allocator, req: *Request) Self {
+        pub fn init(allocator: std.mem.Allocator, req: *Request) Self {
             if (!req.head.method.requestHasBody()) {
                 return .{ .value = error.RequestBodyMissing };
             }
@@ -216,7 +216,7 @@ test "extract returns Json when request is valid" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const json = Json(Person).extract(allocator, &http_req);
+    const json = Json(Person).init(allocator, &http_req);
     defer json.deinit(allocator);
 
     const person = try json.value;
@@ -246,7 +246,7 @@ test "extract fails when content type is missing" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const json = Json(Person).extract(allocator, &http_req);
+    const json = Json(Person).init(allocator, &http_req);
     defer json.deinit(allocator);
 
     const result = json.value;
@@ -276,7 +276,7 @@ test "extract fails when content type is not application/json" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const json = Json(Person).extract(allocator, &http_req);
+    const json = Json(Person).init(allocator, &http_req);
     defer json.deinit(allocator);
 
     const result = json.value;
@@ -305,7 +305,7 @@ test "extract fails when content length is missing" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const json = Json(Person).extract(allocator, &http_req);
+    const json = Json(Person).init(allocator, &http_req);
     defer json.deinit(allocator);
 
     const result = json.value;
@@ -333,7 +333,7 @@ test "extract fails when content length is zero" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const json = Json(Person).extract(allocator, &http_req);
+    const json = Json(Person).init(allocator, &http_req);
     defer json.deinit(allocator);
 
     const result = json.value;

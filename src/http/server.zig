@@ -148,7 +148,7 @@ pub fn Server(comptime State: type) type {
 
         fn handleRequest(router: *const Router, ctx: Context, state: *State, req: *HttpRequest) !void {
             var target = req.head.target;
-            if (std.mem.indexOfScalar(u8, target, '?')) |idx| {
+            if (std.mem.findScalar(u8, target, '?')) |idx| {
                 target = target[0..idx];
             }
 

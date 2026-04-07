@@ -50,7 +50,7 @@ pub fn matches(comptime T: type) bool {
 ///
 /// The returned WebSocket can be used with onConnected() to handle
 /// the actual WebSocket handshake and connection.
-pub fn extract(req: *Request) WebSocket {
+pub fn init(req: *Request) WebSocket {
     const upg = req.upgradeRequested();
     return switch (upg) {
         .websocket => |key| {
