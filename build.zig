@@ -3,6 +3,19 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const graceful_shutdown_timeout_seconds = b.option(
+        u32,
+        "graceful_shutdown_timeout_seconds",
+        "Graceful shutdown timeout for waiting on active HTTP connection tasks before force-canceling (seconds).",
+    ) orelse 5;
+
+    const options = b.addOptions();
+    options.addOption(
+        u32,
+        "graceful_shutdown_timeout_seconds",
+        graceful_shutdown_timeout_seconds,
+    );
+    const options_module = options.createModule();
 
     const http = b.addModule("http", .{
         .root_source_file = b.path("src/http/server.zig"),
@@ -17,6 +30,7 @@ pub fn build(b: *std.Build) void {
     });
 
     http.addImport("extract", extract);
+    http.addImport("options", options_module);
 
     const mod = b.addModule("volt", .{
         .root_source_file = b.path("src/root.zig"),

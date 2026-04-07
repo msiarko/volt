@@ -5,6 +5,7 @@
 //! and provides a context for request handling.
 
 const std = @import("std");
+const options = @import("options");
 const HttpRequest = std.http.Server.Request;
 const ServerRouter = @import("router.zig").Router;
 const IpAddress = std.Io.net.IpAddress;
@@ -35,6 +36,15 @@ pub fn Server(comptime State: type) type {
     return struct {
         const Self = @This();
         const Router = ServerRouter(State);
+        const graceful_shutdown_timeout: std.Io.Clock.Duration = .{
+            .raw = std.Io.Duration.fromSeconds(options.graceful_shutdown_timeout_seconds),
+            .clock = .real,
+        };
+
+        const ShutdownWait = union(enum) {
+            tasks_done: std.Io.Cancelable!void,
+            timeout: std.Io.Cancelable!void,
+        };
 
         /// The HTTP router that handles request routing and handler execution
         router: Router,
@@ -81,22 +91,16 @@ pub fn Server(comptime State: type) type {
         /// - `options`: Listen options for the server socket
         ///
         /// The server will continue running until interrupted or an error occurs.
-        pub fn listen(self: *Self, address: IpAddress, options: ListenOptions) !void {
+        pub fn listen(self: *Self, address: IpAddress, listen_options: ListenOptions) !void {
             var server = try IpAddress.listen(
                 &address,
                 self.io,
-                options,
+                listen_options,
             );
+            defer server.deinit(self.io);
 
-            var tasks: std.ArrayList(std.Io.Future(void)) = .empty;
-            defer {
-                for (tasks.items) |*entry| {
-                    entry.cancel(self.io);
-                }
-
-                tasks.deinit(self.allocator);
-                server.deinit(self.io);
-            }
+            var tasks: std.Io.Group = .init;
+            errdefer tasks.cancel(self.io);
 
             var buffer: [32]u8 = undefined;
             var fixed_writer = std.Io.Writer.fixed(&buffer);
@@ -105,13 +109,56 @@ pub fn Server(comptime State: type) type {
 
             std.log.info("Server is listening on http://{s}", .{buffer[0..fixed_writer.end]});
             try self.acceptConnections(&server, &tasks);
+            self.gracefulShutdown(&tasks, graceful_shutdown_timeout);
         }
 
-        fn acceptConnections(self: *Self, server: *std.Io.net.Server, tasks: *std.ArrayList(std.Io.Future(void))) !void {
+        fn acceptConnections(self: *Self, server: *std.Io.net.Server, tasks: *std.Io.Group) !void {
             while (true) {
-                const conn = try server.accept(self.io);
-                const task = self.io.async(handleConnection, .{ self, conn });
-                try tasks.append(self.allocator, task);
+                const conn = server.accept(self.io) catch |err| switch (err) {
+                    error.Canceled => return,
+                    else => return err,
+                };
+                tasks.async(self.io, handleConnection, .{ self, conn });
+            }
+        }
+
+        fn awaitTasks(tasks: *std.Io.Group, io: std.Io) std.Io.Cancelable!void {
+            try tasks.await(io);
+        }
+
+        fn sleepFor(duration: std.Io.Clock.Duration, io: std.Io) std.Io.Cancelable!void {
+            try duration.sleep(io);
+        }
+
+        fn gracefulShutdown(self: *Self, tasks: *std.Io.Group, timeout: std.Io.Clock.Duration) void {
+            var select_buffer: [2]ShutdownWait = undefined;
+            var select = std.Io.Select(ShutdownWait).init(self.io, &select_buffer);
+            defer select.cancelDiscard();
+
+            select.async(.tasks_done, awaitTasks, .{ tasks, self.io });
+            select.async(.timeout, sleepFor, .{ timeout, self.io });
+
+            const result = select.await() catch |err| switch (err) {
+                error.Canceled => {
+                    tasks.cancel(self.io);
+                    return;
+                },
+            };
+
+            switch (result) {
+                .tasks_done => |await_result| {
+                    await_result catch {
+                        tasks.cancel(self.io);
+                    };
+                },
+                .timeout => |timeout_result| {
+                    _ = timeout_result catch {};
+                    std.log.warn(
+                        "Graceful shutdown timeout reached after {}ms; canceling remaining connection tasks",
+                        .{timeout.raw.toMilliseconds()},
+                    );
+                    tasks.cancel(self.io);
+                },
             }
         }
 
