@@ -2,21 +2,19 @@
 //!
 //! This module provides a type-safe HTTP router that automatically extracts
 //! parameters from HTTP requests and injects them into handler functions.
-//! It supports JSON deserialization, WebSocket upgrades, and custom extractors.
+//! It supports JSON deserialization, WebSocket upgrades, and custom extract support.
 
 const std = @import("std");
 const Request = std.http.Server.Request;
 const Response = @import("response.zig").Response;
-const Server = @import("server.zig").Server;
 const Context = @import("context.zig").Context;
-const extractors = @import("extractors");
-const Param = std.builtin.Type.Fn.Param;
+const extract = @import("extract");
 
 /// Creates a generic HTTP router type parameterized by application state.
 ///
 /// The State type parameter allows handlers to access shared application state.
 /// The router automatically resolves handler parameters from the request using
-/// compile-time reflection and built-in extractors.
+/// compile-time reflection and built-in extract support.
 ///
 /// Example:
 /// ```zig
@@ -61,7 +59,13 @@ pub fn Router(comptime State: type) type {
                 const impl = struct {
                     fn exec(ptr: *const anyopaque, ctx: Context, state: *State, req: *Request) !Response {
                         const values = .{ ctx, state };
-                        const params = extractors.resolveParams(HandlerFunction, @TypeOf(values), values, req);
+                        const params = extract.resolveParams(
+                            HandlerFunction,
+                            @TypeOf(values),
+                            ctx.request_allocator,
+                            values,
+                            req,
+                        );
                         const fun: HandlerFunction = @ptrCast(@alignCast(ptr));
                         return @call(.auto, fun, params);
                     }

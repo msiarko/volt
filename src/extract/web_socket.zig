@@ -9,7 +9,6 @@ const std = @import("std");
 const Request = std.http.Server.Request;
 const StructField = std.builtin.Type.StructField;
 const Socket = std.http.Server.WebSocket;
-const http = @import("http");
 const utils = @import("utils.zig");
 
 /// Key used to identify WebSocket extractor types at compile time.
@@ -50,7 +49,7 @@ pub fn matches(comptime T: type) bool {
 ///
 /// The returned WebSocket can be used with onConnected() to handle
 /// the actual WebSocket handshake and connection.
-pub fn extract(req: *Request) WebSocket {
+pub fn init(req: *Request) WebSocket {
     const upg = req.upgradeRequested();
     return switch (upg) {
         .websocket => |key| {
@@ -138,8 +137,8 @@ pub const WebSocket = struct {
         }
 
         const handler_params_len = handler_type_info.@"fn".params.len;
-        const args_fileds = args_type_info.@"struct".fields;
-        const params = comptime getParamsTypes(handler_params_len, args_fileds);
+        const args_fields = args_type_info.@"struct".fields;
+        const params = comptime getParamsTypes(handler_params_len, args_fields);
         var new_args: @Tuple(params) = undefined;
         inline for (0..params.len) |i| {
             if (i == params.len - 1) {
@@ -151,20 +150,6 @@ pub const WebSocket = struct {
         }
 
         @call(.always_inline, handler, new_args) catch return WebSocketError.WebSocketHandlerFailed;
-    }
-
-    /// Converts the WebSocket extractor to an HTTP Response.
-    ///
-    /// This method allows WebSocket extractors to be returned from HTTP
-    /// handlers, triggering the WebSocket upgrade process through the
-    /// response handling system.
-    ///
-    /// Returns: HTTP Response containing the WebSocket upgrade
-    ///
-    /// This is typically used as the return value from route handlers
-    /// that handle WebSocket connections.
-    pub fn intoResponse(self: Self) http.Response {
-        return .{ .web_socket = self };
     }
 };
 
@@ -181,4 +166,18 @@ test "matches returns false for non-WebSocket extractor" {
     };
 
     try std.testing.expect(!comptime matches(Person));
+}
+
+test "init returns NotWebSocketUpgrade for regular HTTP request" {
+    const req_bytes = std.fmt.comptimePrint("GET /ws HTTP/1.1\r\n" ++ "\r\n", .{});
+    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+
+    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+    var http_req = try http_server.receiveHead();
+
+    const ws = init(&http_req);
+    try std.testing.expectError(WebSocketError.NotWebSocketUpgrade, ws.socket);
 }
