@@ -13,32 +13,6 @@ const StructField = std.builtin.Type.StructField;
 /// Key used to identify Query extractor types at compile time.
 const QUERY_EXTRACTOR_KEY: []const u8 = "QUERY_EXTRACTOR";
 
-/// Checks if a type is a Query extractor by examining its structure.
-///
-/// This function uses compile-time reflection to determine if the given type
-/// has a field named "key" with the default value "QUERY_EXTRACTOR".
-pub fn matches(comptime T: type) bool {
-    return utils.matches(T, QUERY_EXTRACTOR_KEY);
-}
-
-/// Returns the compile-time query parameter name from a Query extractor type.
-///
-/// Compile errors:
-/// - `expected Query extractor type`: Triggered when `matches(T)` is false
-pub fn getParamName(comptime T: type) []const u8 {
-    if (!matches(T)) {
-        @compileError("expected Query extractor type");
-    }
-
-    inline for (@typeInfo(T).@"struct".fields) |field| {
-        if (std.mem.eql(u8, field.name, "name")) {
-            if (StructField.defaultValue(field)) |name| {
-                return name;
-            }
-        }
-    }
-}
-
 /// Creates a Query extractor type for a specific query parameter key.
 ///
 /// The returned type contains an optional string value that is:
@@ -73,17 +47,51 @@ pub fn Query(comptime name: []const u8) type {
     };
 }
 
-test "matches returns true for Query extractor" {
-    try std.testing.expect(comptime matches(Query("name")));
+/// Returns the compile-time query parameter name from a Query extractor type.
+///
+/// Compile errors:
+/// - `expected Query extractor type`: Triggered when the type doesn't match
+fn getParamName(comptime T: type) []const u8 {
+    if (!utils.matches(T, QUERY_EXTRACTOR_KEY)) {
+        @compileError("expected Query extractor type");
+    }
+
+    inline for (@typeInfo(T).@"struct".fields) |field| {
+        if (std.mem.eql(u8, field.name, "name")) {
+            if (StructField.defaultValue(field)) |name| {
+                return name;
+            }
+        }
+    }
 }
 
-test "matches returns false for non-Query extractor" {
+/// Resolver for Query extractors in the compile-time registry.
+///
+/// This struct implements the resolver interface (`matches` and `resolve`) to enable
+/// automatic detection and instantiation of Query extractor types during parameter resolution.
+pub const Resolver = struct {
+    pub fn matches(comptime T: type) bool {
+        return utils.matches(T, QUERY_EXTRACTOR_KEY);
+    }
+
+    pub fn resolve(comptime T: type, allocator: std.mem.Allocator, req: *Request) T {
+        _ = allocator;
+        const param_name = comptime getParamName(T);
+        return Query(param_name).init(req);
+    }
+};
+
+test "Resolver.matches returns true for Query extractor" {
+    try std.testing.expect(comptime Resolver.matches(Query("name")));
+}
+
+test "Resolver.matches returns false for non-Query extractor" {
     const Person = struct {
         name: []const u8,
         age: u8,
     };
 
-    try std.testing.expect(!comptime matches(Person));
+    try std.testing.expect(!comptime Resolver.matches(Person));
 }
 
 test "getParamName returns configured query name" {

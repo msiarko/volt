@@ -2,9 +2,9 @@
 //!
 //! This module provides the core infrastructure for automatically extracting
 //! parameters from HTTP requests and injecting them into handler functions.
-//! It uses compile-time reflection to identify extractor types
-//! (Json, WebSocket, Query, TypedQuery)
-//! and pass the appropriate values to handlers.
+//! It uses compile-time reflection to identify extractor types (Json, WebSocket,
+//! Query, and TypedQuery) and pass appropriate values to handlers through a
+//! compile-time resolver registry pattern.
 
 const std = @import("std");
 const Request = std.http.Server.Request;
@@ -19,6 +19,26 @@ pub const WebSocket = web_socket.WebSocket;
 pub const WebSocketError = web_socket.WebSocketError;
 pub const Query = query.Query;
 pub const TypedQuery = typed_query.TypedQuery;
+
+/// Compile-time collection of extractor resolvers.
+///
+/// Each resolver in this tuple must implement:
+/// - `matches(comptime T: type) bool`: Returns true if resolver can build T
+/// - `resolve(comptime T: type, allocator, req) T`: Builds T from request data
+///
+/// The `resolveParams` function iterates this collection to discover and dispatch
+/// to the appropriate extractor for each handler parameter type.
+const JsonResolver = json.Resolver;
+const WebSocketResolver = web_socket.Resolver;
+const QueryResolver = query.Resolver;
+const TypedQueryResolver = typed_query.Resolver;
+
+const extractor_resolvers = .{
+    JsonResolver,
+    WebSocketResolver,
+    QueryResolver,
+    TypedQueryResolver,
+};
 
 fn getParamsTypes(func_params: []const Param) []const type {
     comptime var func_param_types: [func_params.len]type = undefined;
@@ -88,19 +108,18 @@ pub inline fn resolveParams(
     inline for (func_param_types, 0..func_params.len) |param_type, i| {
         if (comptime getFieldName(param_type, Values)) |n| {
             params[i] = @field(values, n);
-        } else if (comptime json.matches(param_type)) {
-            const ExtractedType = json.Extracted(param_type);
-            params[i] = json.Json(ExtractedType).init(request_allocator, req);
-        } else if (comptime web_socket.matches(param_type)) {
-            params[i] = web_socket.init(req);
-        } else if (comptime query.matches(param_type)) {
-            const param_name = comptime query.getParamName(param_type);
-            params[i] = query.Query(param_name).init(req);
-        } else if (comptime typed_query.matches(param_type)) {
-            const ExtractedType = typed_query.Extracted(param_type);
-            params[i] = typed_query.TypedQuery(ExtractedType).init(request_allocator, req);
         } else {
-            @compileError("unable to resolve parameter of type " ++ @typeName(param_type));
+            comptime var resolved = false;
+            inline for (extractor_resolvers) |Resolver| {
+                if (!resolved and comptime Resolver.matches(param_type)) {
+                    params[i] = Resolver.resolve(param_type, request_allocator, req);
+                    resolved = true;
+                }
+            }
+
+            if (!resolved) {
+                @compileError("unable to resolve parameter of type " ++ @typeName(param_type));
+            }
         }
     }
 

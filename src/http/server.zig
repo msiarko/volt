@@ -37,7 +37,7 @@ pub fn Server(comptime State: type) type {
         const Self = @This();
         const Router = ServerRouter(State);
         const graceful_shutdown_timeout: std.Io.Clock.Duration = .{
-            .raw = std.Io.Duration.fromSeconds(options.graceful_shutdown_timeout_seconds),
+            .raw = std.Io.Duration.fromSeconds(options.shutdown_timeout_seconds),
             .clock = .real,
         };
 

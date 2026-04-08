@@ -13,55 +13,6 @@ const utils = @import("utils.zig");
 /// Key used to identify JSON extractor types at compile time.
 const JSON_EXTRACTOR_KEY: []const u8 = "JSON_EXTRACTOR";
 
-/// Checks if a type is a JSON extractor by examining its structure.
-///
-/// This function uses compile-time reflection to determine if the given type
-/// has a field named "key" with the default value "JSON_EXTRACTOR".
-///
-/// Parameters:
-/// - `T`: The type to check
-///
-/// Returns: true if T is a JSON extractor type, false otherwise
-///
-/// This is used by the router to automatically detect JSON parameters
-/// in handler function signatures.
-pub fn matches(comptime T: type) bool {
-    return utils.matches(T, JSON_EXTRACTOR_KEY);
-}
-
-/// Extracts the payload type from a Json extractor type.
-///
-/// This function performs compile-time reflection to locate the `value` field
-/// on the extractor and unwraps its type shape (`anyerror!*U`) to return `U`.
-///
-/// Before unwrapping, it validates that `T` matches the Json extractor marker
-/// via `matches(T)`. If not, compilation fails.
-///
-/// Parameters:
-/// - `T`: A Json(U) extractor type (must define a `value` field)
-///
-/// Returns: The extracted payload type `U`
-///
-/// Compile errors:
-/// - `expected Json extractor type`: Triggered when `matches(T)` is false
-///
-/// Example:
-/// ```zig
-/// const Person = struct { name: []const u8, age: u32 };
-/// const ExtractedType = Extracted(Json(Person)); // Person
-/// ```
-pub fn Extracted(comptime T: type) type {
-    if (!matches(T)) {
-        @compileError("expected Json extractor type");
-    }
-
-    inline for (@typeInfo(T).@"struct".fields) |field| {
-        if (std.mem.eql(u8, field.name, "value")) {
-            return @typeInfo(@typeInfo(field.type).error_union.payload).pointer.child;
-        }
-    }
-}
-
 /// Creates a JSON extractor type for automatic deserialization.
 ///
 /// This generic type provides automatic JSON parsing from HTTP request bodies.
@@ -192,6 +143,33 @@ pub fn Json(comptime T: type) type {
         }
     };
 }
+
+/// Resolver for JSON extractors in the compile-time registry.
+///
+/// This struct implements the resolver interface (`matches` and `resolve`) to enable
+/// automatic detection and instantiation of Json extractor types during parameter resolution.
+pub const Resolver = struct {
+    fn Extracted(comptime T: type) type {
+        if (!Resolver.matches(T)) {
+            @compileError("expected Json extractor type");
+        }
+
+        inline for (@typeInfo(T).@"struct".fields) |field| {
+            if (std.mem.eql(u8, field.name, "value")) {
+                return @typeInfo(@typeInfo(field.type).error_union.payload).pointer.child;
+            }
+        }
+    }
+
+    pub fn matches(comptime T: type) bool {
+        return utils.matches(T, JSON_EXTRACTOR_KEY);
+    }
+
+    pub fn resolve(comptime T: type, allocator: std.mem.Allocator, req: *Request) T {
+        const resolved_type = Extracted(T);
+        return Json(resolved_type).init(allocator, req);
+    }
+};
 
 test "extract returns Json when request is valid" {
     const allocator = std.testing.allocator;
@@ -346,7 +324,7 @@ test "matches returns true for Json extractor" {
         age: u7,
     };
 
-    try std.testing.expect(comptime matches(Json(Person)));
+    try std.testing.expect(comptime Resolver.matches(Json(Person)));
 }
 
 test "Extracted returns payload type for Json extractor" {
@@ -355,7 +333,7 @@ test "Extracted returns payload type for Json extractor" {
         age: u7,
     };
 
-    try std.testing.expect(comptime Extracted(Json(Person)) == Person);
+    try std.testing.expect(comptime Resolver.Extracted(Json(Person)) == Person);
 }
 
 test "matches returns false for non-Json extractor" {
@@ -364,5 +342,5 @@ test "matches returns false for non-Json extractor" {
         age: u7,
     };
 
-    try std.testing.expect(!comptime matches(Person));
+    try std.testing.expect(!comptime Resolver.matches(Person));
 }

@@ -15,56 +15,30 @@ const utils = @import("utils.zig");
 const WS_EXTRACTOR_KEY: []const u8 = "WS_EXTRACTOR";
 
 pub const WebSocketError = error{
+    /// Failed to perform WebSocket upgrade handshake.
     WebSocketUpgradeFailed,
+    /// Request missing required Sec-WebSocket-Key header.
     WebSocketKeyMissing,
+    /// Request is not a WebSocket upgrade request.
     NotWebSocketUpgrade,
+    /// WebSocket handler function execution failed.
     WebSocketHandlerFailed,
 };
 
-/// Checks if a type is a WebSocket extractor by examining its structure.
+/// Resolver for WebSocket extractors in the compile-time registry.
 ///
-/// This function uses compile-time reflection to determine if the given type
-/// has a field named "key" with the default value "WS_EXTRACTOR".
-///
-/// Parameters:
-/// - `T`: The type to check
-///
-/// Returns: true if T is a WebSocket extractor type, false otherwise
-///
-/// This is used by the router to automatically detect WebSocket parameters
-/// in handler function signatures.
-pub fn matches(comptime T: type) bool {
-    return utils.matches(T, WS_EXTRACTOR_KEY);
-}
+/// This struct implements the resolver interface (`matches` and `resolve`) to enable
+/// automatic detection and instantiation of WebSocket extractor types during parameter resolution.
+pub const Resolver = struct {
+    pub fn matches(comptime T: type) bool {
+        return utils.matches(T, WS_EXTRACTOR_KEY);
+    }
 
-/// Creates a WebSocket extractor from an HTTP request.
-///
-/// This function wraps an HTTP request in a WebSocket extractor struct,
-/// preparing it for potential WebSocket upgrade handling.
-///
-/// Parameters:
-/// - `req`: The HTTP request that may be upgraded to WebSocket
-///
-/// Returns: WebSocket extractor instance
-///
-/// The returned WebSocket can be used with onConnected() to handle
-/// the actual WebSocket handshake and connection.
-pub fn init(req: *Request) WebSocket {
-    const upg = req.upgradeRequested();
-    return switch (upg) {
-        .websocket => |key| {
-            if (key) |k| {
-                var ws = req.respondWebSocket(.{ .key = k }) catch return .{ .socket = WebSocketError.WebSocketUpgradeFailed };
-                ws.flush() catch return .{ .socket = WebSocketError.WebSocketUpgradeFailed };
-                defer ws.flush() catch {};
-                return .{ .socket = ws };
-            }
-
-            return .{ .socket = WebSocketError.WebSocketKeyMissing };
-        },
-        else => return .{ .socket = WebSocketError.NotWebSocketUpgrade },
-    };
-}
+    pub fn resolve(comptime T: type, allocator: std.mem.Allocator, req: *Request) T {
+        _ = allocator;
+        return WebSocket.init(req);
+    }
+};
 
 /// WebSocket extractor and upgrade handler.
 ///
@@ -87,6 +61,23 @@ pub const WebSocket = struct {
     key: []const u8 = WS_EXTRACTOR_KEY,
     /// The underlying WebSocket connection
     socket: WebSocketError!Socket,
+
+    pub fn init(req: *Request) WebSocket {
+        const upg = req.upgradeRequested();
+        return switch (upg) {
+            .websocket => |key| {
+                if (key) |k| {
+                    var ws = req.respondWebSocket(.{ .key = k }) catch return .{ .socket = WebSocketError.WebSocketUpgradeFailed };
+                    ws.flush() catch return .{ .socket = WebSocketError.WebSocketUpgradeFailed };
+                    defer ws.flush() catch {};
+                    return .{ .socket = ws };
+                }
+
+                return .{ .socket = WebSocketError.WebSocketKeyMissing };
+            },
+            else => return .{ .socket = WebSocketError.NotWebSocketUpgrade },
+        };
+    }
 
     fn getParamsTypes(comptime params_len: usize, comptime args_fields: []const StructField) []const type {
         comptime var params: [params_len]type = undefined;
@@ -155,17 +146,17 @@ pub const WebSocket = struct {
 
 const testing = std.testing;
 
-test "matches returns true for WebSocket extractor" {
-    try std.testing.expect(comptime matches(WebSocket));
+test "Resolver.matches returns true for WebSocket extractor" {
+    try std.testing.expect(comptime Resolver.matches(WebSocket));
 }
 
-test "matches returns false for non-WebSocket extractor" {
+test "Resolver.matches returns false for non-WebSocket extractor" {
     const Person = struct {
         name: []const u8,
         age: u7,
     };
 
-    try std.testing.expect(!comptime matches(Person));
+    try std.testing.expect(!comptime Resolver.matches(Person));
 }
 
 test "init returns NotWebSocketUpgrade for regular HTTP request" {
@@ -178,6 +169,6 @@ test "init returns NotWebSocketUpgrade for regular HTTP request" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const ws = init(&http_req);
+    const ws = WebSocket.init(&http_req);
     try std.testing.expectError(WebSocketError.NotWebSocketUpgrade, ws.socket);
 }
