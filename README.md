@@ -76,6 +76,7 @@ Volt automatically extracts parameters from HTTP requests using compile-time ref
 - **extract.Query("name")**: Extracts a single query parameter by key.
 - **extract.TypedQuery(T)**: Maps query parameters into a typed filter struct (`?[]const u8` fields).
 - **extract.Header("name")**: Extracts a single HTTP header by name.
+- **extract.RouteParam("name")**: Extracts a named path segment from parametric routes (e.g., `/users/:id`).
 - **extract.WebSocket**: Handles WebSocket upgrade requests and connection handoff.
 
 ### JSON Body Parsing
@@ -151,6 +152,26 @@ fn secureHandler(
     };
 
     return volt.Response.text(ctx.request_allocator, .ok, token, null);
+}
+```
+
+### Route Parameter Extraction
+
+```zig
+try server.router.get("/users/:id", &getUserById);
+
+fn getUserById(
+    ctx: volt.Context,
+    state: *AppState,
+    user_id: volt.extract.RouteParam("id")
+) !volt.Response {
+    _ = state;
+
+    const id = user_id.value orelse {
+        return volt.Response.text(ctx.request_allocator, .bad_request, "Missing route parameter: id", null);
+    };
+
+    return volt.Response.text(ctx.request_allocator, .ok, id, null);
 }
 ```
 

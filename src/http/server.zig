@@ -203,11 +203,12 @@ pub fn Server(comptime State: type) type {
 
         fn handleRequest(router: *const Router, ctx: Context, state: *State, req: *HttpRequest) !void {
             const target = normalizedTarget(req.head.target);
-
             const method = req.head.method;
+
+            // Fast path: exact match via hash map.
             if (router.routes.get(target)) |route_entry| {
                 if (route_entry.handlers.get(method)) |handler| {
-                    const res = handler.execute(ctx, state, req) catch |err| {
+                    const res = handler.execute(ctx, state, null, req) catch |err| {
                         if (utils.isMemberOfErrorSet(extract.WebSocketError, err)) return;
                         try req.respond(@errorName(err), .{ .status = .internal_server_error });
                         return;
@@ -216,9 +217,27 @@ pub fn Server(comptime State: type) type {
                 } else {
                     return respondNotFound(req);
                 }
-            } else {
-                return respondNotFound(req);
+                return;
             }
+
+            // Slow path: linear scan over parametric routes.
+            for (router.parametric_routes.items) |*route| {
+                if (route.match(target)) {
+                    if (route.entry.handlers.get(method)) |handler| {
+                        const res = handler.execute(ctx, state, route.pattern, req) catch |err| {
+                            if (utils.isMemberOfErrorSet(extract.WebSocketError, err)) return;
+                            try req.respond(@errorName(err), .{ .status = .internal_server_error });
+                            return;
+                        };
+                        try response.respond(req, res);
+                    } else {
+                        return respondNotFound(req);
+                    }
+                    return;
+                }
+            }
+
+            return respondNotFound(req);
         }
 
         fn normalizedTarget(target: []const u8) []const u8 {
