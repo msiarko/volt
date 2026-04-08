@@ -36,8 +36,8 @@ pub fn Router(comptime State: type) type {
         /// Map of exact route paths to their handlers
         routes: std.StringHashMap(Route),
         /// List of routes containing path parameters (e.g., `/users/:id`).
-        /// Checked in registration order after an exact match fails.
-        parametric_routes: std.ArrayListUnmanaged(ParametricRoute),
+        /// Checked in precedence order (more literal segments first) after an exact match fails.
+        parametric_routes: std.ArrayList(ParametricRoute),
 
         /// Virtual table for type-erased handler execution
         const VTable = struct {
@@ -109,6 +109,8 @@ pub fn Router(comptime State: type) type {
             pattern: []const u8,
             /// Parsed path segments, owned by the router allocator.
             segments: []Segment,
+            /// Number of literal segments used for precedence ordering.
+            literal_count: usize,
             /// Handlers indexed by HTTP method.
             entry: Route,
 
@@ -155,12 +157,14 @@ pub fn Router(comptime State: type) type {
             var it = self.routes.iterator();
             while (it.next()) |entry| {
                 entry.value_ptr.handlers.deinit();
+                self.allocator.free(entry.key_ptr.*);
             }
             self.routes.deinit();
 
             for (self.parametric_routes.items) |*route| {
                 route.entry.handlers.deinit();
                 self.allocator.free(route.segments);
+                self.allocator.free(route.pattern);
             }
             self.parametric_routes.deinit(self.allocator);
         }
@@ -214,7 +218,7 @@ pub fn Router(comptime State: type) type {
         }
 
         fn addRoute(self: *Self, method: std.http.Method, path: []const u8, handler: Handler) !void {
-            if (std.mem.findScalar(u8, path, ':') != null) {
+            if (isParametricPath(path)) {
                 // Parametric route — check if the pattern is already registered.
                 for (self.parametric_routes.items) |*route| {
                     if (std.mem.eql(u8, route.pattern, path)) {
@@ -222,39 +226,85 @@ pub fn Router(comptime State: type) type {
                         return;
                     }
                 }
-                const segments = try parseSegments(self.allocator, path);
+                const parsed = try parseSegments(self.allocator, path);
+                errdefer self.allocator.free(parsed.segments);
+                const owned_pattern = try self.allocator.dupe(u8, path);
+                errdefer self.allocator.free(owned_pattern);
                 var entry = Route{ .handlers = .init(self.allocator) };
+                errdefer entry.handlers.deinit();
                 try entry.handlers.put(method, handler);
-                try self.parametric_routes.append(self.allocator, .{
-                    .pattern = path,
-                    .segments = segments,
+
+                var insert_index = self.parametric_routes.items.len;
+                for (self.parametric_routes.items, 0..) |existing, i| {
+                    if (parsed.literal_count > existing.literal_count) {
+                        insert_index = i;
+                        break;
+                    }
+                }
+
+                try self.parametric_routes.insert(self.allocator, insert_index, .{
+                    .pattern = owned_pattern,
+                    .segments = parsed.segments,
+                    .literal_count = parsed.literal_count,
                     .entry = entry,
                 });
             } else {
-                var res = try self.routes.getOrPut(path);
-                if (!res.found_existing) {
-                    res.value_ptr.* = .{ .handlers = .init(self.allocator) };
+                if (self.routes.getPtr(path)) |route| {
+                    try route.handlers.put(method, handler);
+                } else {
+                    const owned_path = try self.allocator.dupe(u8, path);
+                    errdefer self.allocator.free(owned_path);
+                    var entry = Route{ .handlers = .init(self.allocator) };
+                    errdefer entry.handlers.deinit();
+                    try entry.handlers.put(method, handler);
+                    try self.routes.put(owned_path, entry);
                 }
-                try res.value_ptr.handlers.put(method, handler);
             }
+        }
+
+        fn isParametricPath(path: []const u8) bool {
+            const normalized = if (path.len > 0 and path[0] == '/') path[1..] else path;
+            var it = std.mem.splitScalar(u8, normalized, '/');
+            while (it.next()) |seg| {
+                if (seg.len > 0 and seg[0] == ':') return true;
+            }
+            return false;
         }
 
         /// Parses a route pattern string into a slice of `Segment` values.
         ///
         /// Leading `/` is stripped before splitting by `/`. Segments starting
         /// with `:` become `.param` captures; all others become `.literal`.
-        fn parseSegments(allocator: std.mem.Allocator, pattern: []const u8) ![]Segment {
+        fn parseSegments(allocator: std.mem.Allocator, pattern: []const u8) !struct { segments: []Segment, literal_count: usize } {
             const path = if (pattern.len > 0 and pattern[0] == '/') pattern[1..] else pattern;
             var it = std.mem.splitScalar(u8, path, '/');
             var list: std.ArrayListUnmanaged(Segment) = .empty;
+            errdefer list.deinit(allocator);
+            var literal_count: usize = 0;
             while (it.next()) |seg| {
                 if (seg.len > 0 and seg[0] == ':') {
-                    try list.append(allocator, .{ .param = seg[1..] });
+                    const name = seg[1..];
+                    for (list.items) |existing| {
+                        switch (existing) {
+                            .param => |existing_name| {
+                                if (std.mem.eql(u8, existing_name, name)) {
+                                    return error.DuplicateRouteParamName;
+                                }
+                            },
+                            .literal => {},
+                        }
+                    }
+                    try list.append(allocator, .{ .param = name });
                 } else {
                     try list.append(allocator, .{ .literal = seg });
+                    literal_count += 1;
                 }
             }
-            return list.toOwnedSlice(allocator);
+
+            return .{
+                .segments = try list.toOwnedSlice(allocator),
+                .literal_count = literal_count,
+            };
         }
 
         fn makeHandler(handler: anytype) Handler {
