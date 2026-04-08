@@ -19,8 +19,7 @@ const HEADER_EXTRACTOR_KEY: []const u8 = "HEADER_EXTRACTOR";
 /// - `null` when the header is absent from the request
 /// - `[]const u8` slice when the header is present (may be an empty string)
 ///
-/// Header name comparison is case-sensitive and follows the exact casing
-/// supplied to the extractor.
+/// Header name comparison is case-insensitive.
 ///
 /// Example usage in a router handler:
 /// ```zig
@@ -48,7 +47,7 @@ pub fn Header(comptime name: []const u8) type {
         pub fn init(req: *Request) Self {
             var header_it = req.iterateHeaders();
             while (header_it.next()) |entry| {
-                if (std.mem.eql(u8, entry.name, name)) {
+                if (std.ascii.eqlIgnoreCase(entry.name, name)) {
                     return .{ .value = entry.value };
                 }
             }

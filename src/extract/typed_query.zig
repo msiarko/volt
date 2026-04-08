@@ -58,7 +58,7 @@ pub fn TypedQuery(comptime T: type) type {
             var value_set = false;
             while (query_it.next()) |entry| {
                 inline for (fields) |field| {
-                    if (std.mem.eql(u8, entry.key, field.name)) {
+                    if (std.ascii.eqlIgnoreCase(entry.key, field.name)) {
                         if (entry.value) |value| {
                             value_set = true;
                             @field(typed_query.*, field.name) = value;

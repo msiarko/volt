@@ -37,7 +37,7 @@ pub fn Query(comptime name: []const u8) type {
         pub fn init(req: *Request) Self {
             var query_it = utils.queryIterator(req.head.target) orelse return .{ .value = null };
             while (query_it.next()) |entry| {
-                if (std.mem.eql(u8, entry.key, name)) {
+                if (std.ascii.eqlIgnoreCase(entry.key, name)) {
                     return .{ .value = entry.value };
                 }
             }
