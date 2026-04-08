@@ -1,4 +1,6 @@
-# Volt
+<p align="center">
+  <img src="docs/assets/icon.png" alt="Volt logo" width="180" style="border-radius: 10%;" />
+</p>
 
 A modern, type-safe web library for Zig with automatic parameter injection and WebSocket support.
 
