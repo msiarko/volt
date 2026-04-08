@@ -9,6 +9,34 @@ const std = @import("std");
 const Request = std.http.Server.Request;
 const StructField = std.builtin.Type.StructField;
 
+fn isHexDigit(c: u8) bool {
+    return switch (c) {
+        '0'...'9', 'a'...'f', 'A'...'F' => true,
+        else => false,
+    };
+}
+
+fn isValidEncodedPathSegment(seg: []const u8) bool {
+    var i: usize = 0;
+    while (i < seg.len) {
+        const c = seg[i];
+
+        // Raw whitespace and ASCII controls are invalid in URI path segments.
+        if (std.ascii.isWhitespace(c) or c < 0x20 or c == 0x7f) return false;
+
+        if (c == '%') {
+            if (i + 2 >= seg.len) return false;
+            if (!isHexDigit(seg[i + 1]) or !isHexDigit(seg[i + 2])) return false;
+            i += 3;
+            continue;
+        }
+
+        i += 1;
+    }
+
+    return true;
+}
+
 /// Extracts the configured path parameter by comparing the matched
 /// route pattern (e.g., `/users/:id`) against the request target.
 fn initRouteParam(comptime name: []const u8, route_pattern: ?[]const u8, req: *Request) RouteParam(name) {
@@ -66,6 +94,7 @@ fn resolveValue(name: []const u8, route_pattern: ?[]const u8, req_target: []cons
         const req_seg = req_it.next() orelse return null;
         if (pat_seg.len > 0 and pat_seg[0] == ':') {
             if (std.mem.eql(u8, pat_seg[1..], name)) {
+                if (!isValidEncodedPathSegment(req_seg)) return null;
                 return req_seg;
             }
         } else if (!std.mem.eql(u8, pat_seg, req_seg)) {
@@ -153,4 +182,28 @@ test "RouteParam.init resolves multiple params from one pattern" {
 
     try std.testing.expectEqualStrings("abc", team_id.value.?);
     try std.testing.expectEqualStrings("42", user_id.value.?);
+}
+
+test "RouteParam.init keeps valid encoded segment" {
+    const req_bytes = "GET /blocks/hello%20world HTTP/1.1\r\n\r\n";
+    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+    var http_req = try http_server.receiveHead();
+
+    const result = initRouteParam("name", "/blocks/:name", &http_req);
+    try std.testing.expectEqualStrings("hello%20world", result.value.?);
+}
+
+test "RouteParam.init rejects malformed encoded segment" {
+    const req_bytes = "GET /blocks/hello%2 HTTP/1.1\r\n\r\n";
+    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+    var http_req = try http_server.receiveHead();
+
+    const result = initRouteParam("name", "/blocks/:name", &http_req);
+    try std.testing.expectEqual(null, result.value);
 }

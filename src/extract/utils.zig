@@ -35,6 +35,56 @@ pub fn queryIterator(target: []const u8) ?QueryIterator {
     return .{ .parts = std.mem.splitScalar(u8, target[start_idx..], '&') };
 }
 
+pub fn queryComponentNeedsDecoding(component: []const u8) bool {
+    for (component) |c| {
+        if (c == '%' or c == '+') return true;
+    }
+    return false;
+}
+
+fn decodeHexNibble(c: u8) ?u8 {
+    return switch (c) {
+        '0'...'9' => c - '0',
+        'a'...'f' => 10 + (c - 'a'),
+        'A'...'F' => 10 + (c - 'A'),
+        else => null,
+    };
+}
+
+pub fn decodeQueryComponent(allocator: std.mem.Allocator, component: []const u8) ![]const u8 {
+    if (!queryComponentNeedsDecoding(component)) return component;
+
+    const out = try allocator.alloc(u8, component.len);
+    var out_i: usize = 0;
+    var i: usize = 0;
+    while (i < component.len) {
+        const c = component[i];
+        if (c == '+') {
+            out[out_i] = ' ';
+            out_i += 1;
+            i += 1;
+            continue;
+        }
+
+        if (c == '%') {
+            if (i + 2 >= component.len) return error.InvalidPercentEncoding;
+
+            const hi = decodeHexNibble(component[i + 1]) orelse return error.InvalidPercentEncoding;
+            const lo = decodeHexNibble(component[i + 2]) orelse return error.InvalidPercentEncoding;
+            out[out_i] = (hi << 4) | lo;
+            out_i += 1;
+            i += 3;
+            continue;
+        }
+
+        out[out_i] = c;
+        out_i += 1;
+        i += 1;
+    }
+
+    return out[0..out_i];
+}
+
 const testing = std.testing;
 
 test "queryIterator yields key value pairs" {
@@ -53,4 +103,19 @@ test "queryIterator yields key value pairs" {
 
 test "queryIterator returns null for missing query string" {
     try testing.expectEqual(null, queryIterator("/users"));
+}
+
+test "decodeQueryComponent decodes percent escapes and plus" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const decoded = try decodeQueryComponent(arena.allocator(), "first+name%3Dzig%20lang");
+    try testing.expectEqualStrings("first name=zig lang", decoded);
+}
+
+test "decodeQueryComponent fails on malformed percent escape" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    try testing.expectError(error.InvalidPercentEncoding, decodeQueryComponent(arena.allocator(), "bad%2"));
 }

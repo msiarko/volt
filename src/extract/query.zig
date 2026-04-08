@@ -15,11 +15,24 @@ const Context = @import("../http/context.zig").Context;
 ///
 /// This function parses the portion of the request URL after `?`, splits
 /// pairs by `&`, and returns the value for the configured key.
-fn initQuery(comptime name: []const u8, req: *Request) Query(name) {
+fn initQuery(comptime name: []const u8, allocator: std.mem.Allocator, req: *Request) Query(name) {
     var query_it = utils.queryIterator(req.head.target) orelse return .{ .value = null };
     while (query_it.next()) |entry| {
-        if (std.ascii.eqlIgnoreCase(entry.key, name)) {
-            return .{ .value = entry.value };
+        const key = if (utils.queryComponentNeedsDecoding(entry.key))
+            utils.decodeQueryComponent(allocator, entry.key) catch continue
+        else
+            entry.key;
+
+        if (std.ascii.eqlIgnoreCase(key, name)) {
+            const value = if (entry.value) |raw_value|
+                if (utils.queryComponentNeedsDecoding(raw_value))
+                    utils.decodeQueryComponent(allocator, raw_value) catch null
+                else
+                    raw_value
+            else
+                null;
+
+            return .{ .value = value };
         }
     }
 
@@ -64,7 +77,7 @@ pub fn Query(comptime name: []const u8) type {
         /// }
         /// ```
         pub fn fromContext(ctx: Context) Self {
-            return initQuery(name, ctx.request);
+            return initQuery(name, ctx.request_allocator, ctx.request);
         }
     };
 }
@@ -99,9 +112,8 @@ pub const Resolver = struct {
     }
 
     pub fn resolve(comptime T: type, allocator: std.mem.Allocator, req: *Request) T {
-        _ = allocator;
         const param_name = comptime getParamName(T);
-        return initQuery(param_name, req);
+        return initQuery(param_name, allocator, req);
     }
 
     pub fn resolveWithContext(comptime T: type, ctx: Context) T {
@@ -274,4 +286,81 @@ test "init table-driven query extraction" {
             try std.testing.expectEqual(null, query.value);
         }
     }
+}
+
+test "init decodes encoded query keys and values" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const req_bytes = std.fmt.comptimePrint("GET /person?first%20name=Zig+Lang HTTP/1.1\r\n" ++ "\r\n", .{});
+    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+
+    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+    var http_req = try http_server.receiveHead();
+
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request_allocator = arena.allocator(),
+        .request = &http_req,
+        ._cache = null,
+    };
+    const query = Query("first name").fromContext(test_ctx);
+
+    try std.testing.expect(query.value != null);
+    try std.testing.expectEqualStrings("Zig Lang", query.value.?);
+}
+
+test "init returns null for malformed encoded query value" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const req_bytes = std.fmt.comptimePrint("GET /person?name=Zig%2 HTTP/1.1\r\n" ++ "\r\n", .{});
+    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+
+    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+    var http_req = try http_server.receiveHead();
+
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request_allocator = arena.allocator(),
+        .request = &http_req,
+        ._cache = null,
+    };
+
+    const query = Query("name").fromContext(test_ctx);
+    try std.testing.expectEqual(null, query.value);
+}
+
+test "init decodes double-encoded query value only once" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const req_bytes = std.fmt.comptimePrint("GET /person?name=hello%2520world HTTP/1.1\r\n" ++ "\r\n", .{});
+    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+
+    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+    var http_req = try http_server.receiveHead();
+
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request_allocator = arena.allocator(),
+        .request = &http_req,
+        ._cache = null,
+    };
+
+    const query = Query("name").fromContext(test_ctx);
+    try std.testing.expect(query.value != null);
+    try std.testing.expectEqualStrings("hello%20world", query.value.?);
 }

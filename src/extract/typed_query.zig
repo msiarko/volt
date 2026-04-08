@@ -8,6 +8,15 @@ const std = @import("std");
 const utils = @import("utils.zig");
 const Context = @import("../http/context.zig").Context;
 
+fn freeTypedQueryFields(comptime T: type, arena: std.mem.Allocator, typed_query: *T) void {
+    inline for (@typeInfo(T).@"struct".fields) |field| {
+        if (@field(typed_query.*, field.name)) |field_value| {
+            arena.free(field_value);
+            @field(typed_query.*, field.name) = null;
+        }
+    }
+}
+
 /// Parses request query parameters into a typed struct.
 ///
 /// Behavior:
@@ -42,9 +51,35 @@ fn initTypedQuery(comptime T: type, arena: std.mem.Allocator, req: *std.http.Ser
 
     var value_set = false;
     while (query_it.next()) |entry| {
+        const key = if (utils.queryComponentNeedsDecoding(entry.key))
+            utils.decodeQueryComponent(arena, entry.key) catch |err| {
+                freeTypedQueryFields(T, arena, typed_query);
+                arena.destroy(typed_query);
+                return .{ .value = err };
+            }
+        else
+            entry.key;
+
         inline for (fields) |field| {
-            if (std.ascii.eqlIgnoreCase(entry.key, field.name)) {
-                if (entry.value) |value| {
+            if (std.ascii.eqlIgnoreCase(key, field.name)) {
+                if (entry.value) |raw_value| {
+                    const value = if (utils.queryComponentNeedsDecoding(raw_value))
+                        utils.decodeQueryComponent(arena, raw_value) catch |err| {
+                            freeTypedQueryFields(T, arena, typed_query);
+                            arena.destroy(typed_query);
+                            return .{ .value = err };
+                        }
+                    else
+                        arena.dupe(u8, raw_value) catch |err| {
+                            freeTypedQueryFields(T, arena, typed_query);
+                            arena.destroy(typed_query);
+                            return .{ .value = err };
+                        };
+
+                    if (@field(typed_query.*, field.name)) |previous| {
+                        arena.free(previous);
+                    }
+
                     value_set = true;
                     @field(typed_query.*, field.name) = value;
                 }
@@ -85,6 +120,7 @@ pub fn TypedQuery(comptime T: type) type {
         pub fn deinit(self: *Self, arena: std.mem.Allocator) void {
             const val = self.value catch return;
             if (val) |v| {
+                freeTypedQueryFields(T, arena, v);
                 arena.destroy(v);
             }
         }
@@ -411,4 +447,101 @@ test "init table-driven typed query extraction" {
             try std.testing.expectEqual(null, try typed_query.value);
         }
     }
+}
+
+test "init decodes encoded typed query keys and values" {
+    const Filters = struct {
+        first_name: ?[]const u8,
+        role: ?[]const u8,
+    };
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const req_bytes = std.fmt.comptimePrint("GET /users?first_name=Zig+Lang&role=platform%2Fdev HTTP/1.1\r\n\r\n", .{});
+    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+
+    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+    var http_req = try http_server.receiveHead();
+
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request = &http_req,
+        .request_allocator = arena.allocator(),
+        ._cache = null,
+    };
+
+    var typed_query = TypedQuery(Filters).fromContext(test_ctx);
+    defer typed_query.deinit(arena.allocator());
+
+    const filters = (try typed_query.value) orelse unreachable;
+    try std.testing.expectEqualStrings("Zig Lang", filters.first_name.?);
+    try std.testing.expectEqualStrings("platform/dev", filters.role.?);
+}
+
+test "init returns error for malformed encoded typed query value" {
+    const Filters = struct {
+        name: ?[]const u8,
+    };
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const req_bytes = std.fmt.comptimePrint("GET /users?name=Zig%2 HTTP/1.1\r\n\r\n", .{});
+    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+
+    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+    var http_req = try http_server.receiveHead();
+
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request = &http_req,
+        .request_allocator = arena.allocator(),
+        ._cache = null,
+    };
+
+    var typed_query = TypedQuery(Filters).fromContext(test_ctx);
+    defer typed_query.deinit(arena.allocator());
+
+    try std.testing.expectError(error.InvalidPercentEncoding, typed_query.value);
+}
+
+test "init decodes double-encoded typed query value only once" {
+    const Filters = struct {
+        name: ?[]const u8,
+    };
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const req_bytes = std.fmt.comptimePrint("GET /users?name=hello%2520world HTTP/1.1\r\n\r\n", .{});
+    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+
+    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+    var http_req = try http_server.receiveHead();
+
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request = &http_req,
+        .request_allocator = arena.allocator(),
+        ._cache = null,
+    };
+
+    var typed_query = TypedQuery(Filters).fromContext(test_ctx);
+    defer typed_query.deinit(arena.allocator());
+
+    const filters = (try typed_query.value) orelse unreachable;
+    try std.testing.expectEqualStrings("hello%20world", filters.name.?);
 }

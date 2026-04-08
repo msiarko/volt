@@ -224,7 +224,7 @@ pub fn Server(comptime State: type) type {
                 if (route_entry.handlers.get(method)) |handler| {
                     try executeWithMiddleware(router, handler, ctx, state, null, req);
                 } else {
-                    return respondNotFound(req);
+                    return respondMethodNotAllowed(req);
                 }
                 return;
             }
@@ -235,7 +235,7 @@ pub fn Server(comptime State: type) type {
                     if (route.entry.handlers.get(method)) |handler| {
                         try executeWithMiddleware(router, handler, ctx, state, route.pattern, req);
                     } else {
-                        return respondNotFound(req);
+                        return respondMethodNotAllowed(req);
                     }
                     return;
                 }
@@ -254,6 +254,10 @@ pub fn Server(comptime State: type) type {
 
         fn respondNotFound(req: *HttpRequest) !void {
             return req.respond("Not Found", .{ .status = .not_found });
+        }
+
+        fn respondMethodNotAllowed(req: *HttpRequest) !void {
+            return req.respond("Method Not Allowed", .{ .status = .method_not_allowed });
         }
 
         fn executeWithMiddleware(
@@ -335,7 +339,7 @@ test "handleRequest returns 404 for unknown route" {
     try std.testing.expect(std.mem.indexOf(u8, output, "Not Found") != null);
 }
 
-test "handleRequest returns 404 for method mismatch" {
+test "handleRequest returns 405 for method mismatch" {
     const TestRouter = ServerRouter(void);
     const TestServer = Server(void);
 
@@ -369,7 +373,8 @@ test "handleRequest returns 404 for method mismatch" {
     try stream_buf_writer.flush();
 
     const output = write_buffer[0..stream_buf_writer.end];
-    try std.testing.expect(std.mem.indexOf(u8, output, "404") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "405") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Method Not Allowed") != null);
 }
 
 test "handleRequest ignores websocket extractor errors" {

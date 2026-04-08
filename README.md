@@ -11,6 +11,7 @@ A modern, type-safe web library for Zig with automatic parameter injection and W
 - 🌐 **WebSocket Support**: Seamless WebSocket upgrade handling
 - 🧰 **Request Data Extraction**: Built-in extract support for request data and protocol upgrades
 - 🛣️ **Router**: Flexible routing with HTTP method support
+- 🧩 **Middleware System**: Per-request middleware chain with explicit short-circuiting
 - ⚡ **Async**: Built-in asynchronous request handling
 - 🧠 **Memory Safe**: Request-scoped and server-scoped allocators for safer memory handling
 
@@ -74,6 +75,7 @@ Volt matches routes using the following precedence rules:
 - Parametric routes use `:name` segments, for example `/users/:id`.
 - Among parametric routes, patterns with more literal segments are matched first.
 - Duplicate parameter names in a single route pattern are rejected during registration.
+- If a path matches but the HTTP method does not, Volt returns **405 Method Not Allowed**.
 
 Examples:
 
@@ -102,6 +104,9 @@ Middleware contract:
 
 Use `next.run()` to continue the chain. Returning a `Response` without calling
 `next.run()` short-circuits request processing.
+
+For a complete real-world middleware definition, see
+[`src/middlewares/console_logger.zig`](src/middlewares/console_logger.zig).
 
 ```zig
 const LoggerMiddleware = struct {
@@ -182,6 +187,11 @@ fn handleConnection(ctx: volt.Context, state: *AppState, socket: *std.http.Serve
 
 ### Query Parameter Extraction
 
+Behavior notes:
+
+- Query components are URL-decoded once (`%XX` and `+` as space).
+- Decoding is single-pass only; double-encoded inputs are not fully decoded.
+
 ```zig
 fn findUser(
     ctx: volt.Context,
@@ -229,6 +239,8 @@ Behavior notes:
 - Exact routes are checked before parametric routes.
 - Among parametric routes, more literal segments take precedence over more generic patterns.
 - Duplicate parameter names in the same route pattern are rejected at registration time.
+- Captured segments are validated as URI-encoded path segments (raw whitespace/control chars and malformed `%` escapes are rejected).
+- RouteParam keeps valid encoded values as-is (for example `hello%20world`), so handlers can choose if/when to decode.
 
 ```zig
 try server.router.get("/users/:id", &getUserById);
@@ -456,13 +468,14 @@ Volt is built around several key components:
 
 - **Server**: Generic HTTP server with async request handling
 - **Router**: Type-safe routing with automatic parameter injection
+- **Middleware**: Per-request middleware pipeline for cross-cutting concerns
 - **Context**: Request execution context with I/O and memory resources
 - **Extract**: Automatic parameter extraction (JSON, WebSocket, Query, TypedQuery, Header, RouteParam)
 - **Response**: Unified response type for HTTP and WebSocket responses
 
 ## Status & Roadmap
 
-**Current Version**: 0.0.1 (Early Development)
+**Current Version**: 0.0.4 (Early Development)
 
 **Requirements**: Nightly Zig only (0.16.0-dev or later). Stable Zig releases are not supported.
 
@@ -476,8 +489,6 @@ This is an early-stage library. While the core routing and WebSocket functionali
 - **Feature Flags**: Build-time feature flags in `build.zig` to include only selected features and reduce final binary size when unused features are disabled.
 
 - **SSL/TLS Support**: Secure HTTPS connections
-
-- **Middleware System**: Request/response middleware pipeline for cross-cutting concerns
 
 - **Enhanced Error Handling**: More comprehensive error types and better error messages
 
