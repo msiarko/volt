@@ -10,33 +10,6 @@ const utils = @import("utils.zig");
 /// Key used to identify TypedQuery extractor types at compile time.
 const TYPED_QUERY_EXTRACTOR_KEY: []const u8 = "TYPED_QUERY_EXTRACTOR";
 
-/// Checks if a type is a TypedQuery extractor by examining its structure.
-///
-/// This function uses compile-time reflection to determine if the given type
-/// has a field named "key" with the default value "TYPED_QUERY_EXTRACTOR".
-pub fn matches(comptime T: type) bool {
-    return utils.matches(T, TYPED_QUERY_EXTRACTOR_KEY);
-}
-
-/// Extracts the payload type from a TypedQuery extractor type.
-///
-/// This function locates the `value` field and unwraps the nested type shape
-/// (`anyerror!?*U`) to return `U`.
-///
-/// Compile errors:
-/// - `expected TypedQuery extractor type`: Triggered when `matches(T)` is false
-pub fn Extracted(comptime T: type) type {
-    if (!matches(T)) {
-        @compileError("expected TypedQuery extractor type");
-    }
-
-    inline for (@typeInfo(T).@"struct".fields) |field| {
-        if (std.mem.eql(u8, field.name, "value")) {
-            return @typeInfo(@typeInfo(@typeInfo(field.type).error_union.payload).optional.child).pointer.child;
-        }
-    }
-}
-
 /// Creates a TypedQuery extractor type for structured query parsing.
 ///
 /// The payload type `T` must be a struct where every field is `?[]const u8`.
@@ -85,7 +58,7 @@ pub fn TypedQuery(comptime T: type) type {
             var value_set = false;
             while (query_it.next()) |entry| {
                 inline for (fields) |field| {
-                    if (std.mem.eql(u8, entry.key, field.name)) {
+                    if (std.ascii.eqlIgnoreCase(entry.key, field.name)) {
                         if (entry.value) |value| {
                             value_set = true;
                             @field(typed_query.*, field.name) = value;
@@ -119,22 +92,56 @@ pub fn TypedQuery(comptime T: type) type {
     };
 }
 
-test "matches returns true for TypedQuery extractor" {
+/// Extracts the payload type from a TypedQuery extractor type.
+///
+/// This function locates the `value` field and unwraps the nested type shape
+/// (`anyerror!?*U`) to return `U`.
+///
+/// Compile errors:
+/// - `expected TypedQuery extractor type`: Triggered when the type doesn't match
+fn Extracted(comptime T: type) type {
+    if (!Resolver.matches(T)) {
+        @compileError("expected TypedQuery extractor type");
+    }
+
+    inline for (@typeInfo(T).@"struct".fields) |field| {
+        if (std.mem.eql(u8, field.name, "value")) {
+            return @typeInfo(@typeInfo(@typeInfo(field.type).error_union.payload).optional.child).pointer.child;
+        }
+    }
+}
+
+/// Resolver for TypedQuery extractors in the compile-time registry.
+///
+/// This struct implements the resolver interface (`matches` and `resolve`) to enable
+/// automatic detection and instantiation of TypedQuery extractor types during parameter resolution.
+pub const Resolver = struct {
+    pub fn matches(comptime T: type) bool {
+        return utils.matches(T, TYPED_QUERY_EXTRACTOR_KEY);
+    }
+
+    pub fn resolve(comptime T: type, allocator: std.mem.Allocator, req: *std.http.Server.Request) T {
+        const ExtractedType = Extracted(T);
+        return TypedQuery(ExtractedType).init(allocator, req);
+    }
+};
+
+test "Resolver.matches returns true for TypedQuery extractor" {
     const Filters = struct {
         name: ?[]const u8,
         age: ?[]const u8,
     };
 
-    try std.testing.expect(comptime matches(TypedQuery(Filters)));
+    try std.testing.expect(comptime Resolver.matches(TypedQuery(Filters)));
 }
 
-test "matches returns false for non-TypedQuery extractor" {
+test "Resolver.matches returns false for non-TypedQuery extractor" {
     const Person = struct {
         name: []const u8,
         age: u8,
     };
 
-    try std.testing.expect(!comptime matches(Person));
+    try std.testing.expect(!comptime Resolver.matches(Person));
 }
 
 test "Extracted returns payload type for TypedQuery extractor" {

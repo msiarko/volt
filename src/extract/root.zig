@@ -2,25 +2,52 @@
 //!
 //! This module provides the core infrastructure for automatically extracting
 //! parameters from HTTP requests and injecting them into handler functions.
-//! It uses compile-time reflection to identify extractor types
-//! (Json, WebSocket, Query, TypedQuery)
-//! and pass the appropriate values to handlers.
+//! It uses compile-time reflection to identify extractor types (Json, WebSocket,
+//! Query, TypedQuery, Header, and RouteParam) and pass appropriate values to handlers
+//! through a compile-time resolver registry pattern.
 
 const std = @import("std");
 const Request = std.http.Server.Request;
-const Param = std.builtin.Type.Fn.Param;
+const FnParam = std.builtin.Type.Fn.Param;
 const json = @import("json.zig");
 const web_socket = @import("web_socket.zig");
 const query = @import("query.zig");
 const typed_query = @import("typed_query.zig");
+const header = @import("header.zig");
+const route_param = @import("route_param.zig");
 
 pub const Json = json.Json;
 pub const WebSocket = web_socket.WebSocket;
 pub const WebSocketError = web_socket.WebSocketError;
 pub const Query = query.Query;
 pub const TypedQuery = typed_query.TypedQuery;
+pub const Header = header.Header;
+pub const RouteParam = route_param.RouteParam;
 
-fn getParamsTypes(func_params: []const Param) []const type {
+/// Compile-time collection of extractor resolvers.
+///
+/// Each resolver in this tuple must implement:
+/// - `matches(comptime T: type) bool`: Returns true if resolver can build T
+/// - `resolve(comptime T: type, allocator, req) T`: Builds T from request data
+///
+/// The `resolveParams` function iterates this collection to discover and dispatch
+/// to the appropriate extractor for each handler parameter type.
+const JsonResolver = json.Resolver;
+const WebSocketResolver = web_socket.Resolver;
+const QueryResolver = query.Resolver;
+const TypedQueryResolver = typed_query.Resolver;
+const HeaderResolver = header.Resolver;
+const ParamResolver = route_param.Resolver;
+
+const extractor_resolvers = .{
+    JsonResolver,
+    WebSocketResolver,
+    QueryResolver,
+    TypedQueryResolver,
+    HeaderResolver,
+};
+
+fn getParamsTypes(func_params: []const FnParam) []const type {
     comptime var func_param_types: [func_params.len]type = undefined;
     inline for (func_params, 0..) |param_type, i| {
         func_param_types[i] = param_type.type.?;
@@ -43,7 +70,7 @@ fn Params(comptime T: type) type {
     return @Tuple(func_param_types);
 }
 
-fn funcParams(comptime T: type) []const Param {
+fn funcParams(comptime T: type) []const FnParam {
     const func_type_info = @typeInfo(T).pointer.child;
     return @typeInfo(func_type_info).@"fn".params;
 }
@@ -59,6 +86,7 @@ fn funcParams(comptime T: type) []const Param {
 /// - `Func`: The handler function type to extract parameters for
 /// - `Values`: A struct type containing context and state values
 /// - `values`: The actual context and state values
+/// - `route_pattern`: Matched route pattern (e.g., "/users/:id") or null for exact routes
 /// - `req`: The HTTP request to extract data from
 ///
 /// Returns: A tuple of resolved parameters matching the handler's signature
@@ -80,6 +108,7 @@ pub inline fn resolveParams(
     comptime Values: type,
     request_allocator: std.mem.Allocator,
     values: Values,
+    route_pattern: ?[]const u8,
     req: *Request,
 ) Params(Func) {
     const func_params = comptime funcParams(Func);
@@ -88,19 +117,23 @@ pub inline fn resolveParams(
     inline for (func_param_types, 0..func_params.len) |param_type, i| {
         if (comptime getFieldName(param_type, Values)) |n| {
             params[i] = @field(values, n);
-        } else if (comptime json.matches(param_type)) {
-            const ExtractedType = json.Extracted(param_type);
-            params[i] = json.Json(ExtractedType).init(request_allocator, req);
-        } else if (comptime web_socket.matches(param_type)) {
-            params[i] = web_socket.init(req);
-        } else if (comptime query.matches(param_type)) {
-            const param_name = comptime query.getParamName(param_type);
-            params[i] = query.Query(param_name).init(req);
-        } else if (comptime typed_query.matches(param_type)) {
-            const ExtractedType = typed_query.Extracted(param_type);
-            params[i] = typed_query.TypedQuery(ExtractedType).init(request_allocator, req);
         } else {
-            @compileError("unable to resolve parameter of type " ++ @typeName(param_type));
+            comptime var resolved = false;
+            inline for (extractor_resolvers) |Resolver| {
+                if (!resolved and comptime Resolver.matches(param_type)) {
+                    params[i] = Resolver.resolve(param_type, request_allocator, req);
+                    resolved = true;
+                }
+            }
+
+            if (!resolved and comptime ParamResolver.matches(param_type)) {
+                params[i] = ParamResolver.resolve(param_type, request_allocator, route_pattern, req);
+                resolved = true;
+            }
+
+            if (!resolved) {
+                @compileError("unable to resolve parameter of type " ++ @typeName(param_type));
+            }
         }
     }
 
@@ -121,4 +154,8 @@ test {
 
 test {
     _ = std.testing.refAllDecls(typed_query);
+}
+
+test {
+    _ = std.testing.refAllDecls(route_param);
 }

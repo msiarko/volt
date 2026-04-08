@@ -7,6 +7,8 @@ pub const extract = struct {
     pub const TypedQuery = extract_mod.TypedQuery;
     pub const WebSocket = extract_mod.WebSocket;
     pub const WebSocketError = extract_mod.WebSocketError;
+    pub const Header = extract_mod.Header;
+    pub const RouteParam = extract_mod.RouteParam;
 };
 
 pub const Server = http.Server;

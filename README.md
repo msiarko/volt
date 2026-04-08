@@ -1,4 +1,6 @@
-# Volt
+<p align="center">
+  <img src="docs/assets/icon.png" alt="Volt logo" width="180" style="border-radius: 10%;" />
+</p>
 
 A modern, type-safe web library for Zig with automatic parameter injection and WebSocket support.
 
@@ -64,16 +66,32 @@ try server.router.delete("/users", &deleteUser);
 try server.router.patch("/users", &patchUser);
 ```
 
+### Route Matching Rules
+
+Volt matches routes using the following precedence rules:
+
+- Exact routes are checked before parametric routes.
+- Parametric routes use `:name` segments, for example `/users/:id`.
+- Among parametric routes, patterns with more literal segments are matched first.
+- Duplicate parameter names in a single route pattern are rejected during registration.
+
+Examples:
+
+- `/users/me` is preferred over `/users/:id` for the request `/users/me`.
+- `/users/:id` is preferred over `/:entity/:id` for the request `/users/42`.
+
 ## Automatic Parameter Injection
 
 Volt automatically extracts parameters from HTTP requests using compile-time reflection:
 
 ## Supported Extract Types
 
-- **Json(T)**: Parses request body JSON into typed structs.
-- **Query("name")**: Extracts a single query parameter by key.
-- **TypedQuery(T)**: Maps query parameters into a typed filter struct (`?[]const u8` fields).
-- **WebSocket**: Handles WebSocket upgrade requests and connection handoff.
+- **extract.Json(T)**: Parses request body JSON into typed structs.
+- **extract.Query("name")**: Extracts a single query parameter by key.
+- **extract.TypedQuery(T)**: Maps query parameters into a typed filter struct (`?[]const u8` fields).
+- **extract.Header("name")**: Extracts a single HTTP header by name.
+- **extract.RouteParam("name")**: Extracts a named path segment from parametric routes (e.g., `/users/:id`).
+- **extract.WebSocket**: Handles WebSocket upgrade requests and connection handoff.
 
 ### JSON Body Parsing
 
@@ -87,7 +105,7 @@ const CreateUserRequest = struct {
 fn createUser(
     ctx: volt.Context,
     state: *AppState,
-    user_data: volt.Json(CreateUserRequest)
+    user_data: volt.extract.Json(CreateUserRequest)
 ) !volt.Response {
     const user = try user_data.value;
     defer user_data.deinit(ctx.request_allocator);
@@ -103,7 +121,7 @@ fn createUser(
 fn websocketHandler(
     ctx: volt.Context,
     state: *AppState,
-    ws: volt.WebSocket
+    ws: volt.extract.WebSocket
 ) !volt.Response {
     try ws.onConnected(handleConnection, .{ctx, state});
     return volt.webSocketResponse(ws);
@@ -121,7 +139,7 @@ fn handleConnection(ctx: volt.Context, state: *AppState, socket: *std.http.Serve
 fn findUser(
     ctx: volt.Context,
     state: *AppState,
-    user_id: volt.Query("id")
+    user_id: volt.extract.Query("id")
 ) !volt.Response {
     _ = state;
 
@@ -130,6 +148,81 @@ fn findUser(
     }
 
     return volt.Response.text(ctx.request_allocator, .bad_request, "Missing query parameter: id", null);
+}
+```
+
+### HTTP Header Extraction
+
+```zig
+fn secureHandler(
+    ctx: volt.Context,
+    state: *AppState,
+    auth: volt.extract.Header("Authorization")
+) !volt.Response {
+    _ = state;
+
+    const token = auth.value orelse {
+        return volt.Response.text(ctx.request_allocator, .unauthorized, "Missing Authorization header", null);
+    };
+
+    return volt.Response.text(ctx.request_allocator, .ok, token, null);
+}
+```
+
+### Route Parameter Extraction
+
+Route parameters are matched from parametric route patterns such as `/users/:id`.
+The router is responsible for selecting the matching handler, and `RouteParam`
+resolves the requested value from the matched route pattern and request target.
+
+Behavior notes:
+
+- Route parameter names come from `:name` segments in the registered route pattern.
+- Multiple route parameters are supported in a single route.
+- Exact routes are checked before parametric routes.
+- Among parametric routes, more literal segments take precedence over more generic patterns.
+- Duplicate parameter names in the same route pattern are rejected at registration time.
+
+```zig
+try server.router.get("/users/:id", &getUserById);
+try server.router.get("/teams/:team_id/users/:user_id", &getTeamUser);
+
+fn getUserById(
+    ctx: volt.Context,
+    state: *AppState,
+    user_id: volt.extract.RouteParam("id")
+) !volt.Response {
+    _ = state;
+
+    const id = user_id.value orelse {
+        return volt.Response.text(ctx.request_allocator, .bad_request, "Missing route parameter: id", null);
+    };
+
+    return volt.Response.text(ctx.request_allocator, .ok, id, null);
+}
+
+fn getTeamUser(
+    ctx: volt.Context,
+    state: *AppState,
+    team_id: volt.extract.RouteParam("team_id"),
+    user_id: volt.extract.RouteParam("user_id")
+) !volt.Response {
+    _ = state;
+
+    const team = team_id.value orelse {
+        return volt.Response.text(ctx.request_allocator, .bad_request, "Missing route parameter: team_id", null);
+    };
+
+    const user = user_id.value orelse {
+        return volt.Response.text(ctx.request_allocator, .bad_request, "Missing route parameter: user_id", null);
+    };
+
+    return volt.Response.text(
+        ctx.request_allocator,
+        .ok,
+        try std.fmt.allocPrint(ctx.request_allocator, "team={s}, user={s}", .{ team, user }),
+        null,
+    );
 }
 ```
 
@@ -145,7 +238,7 @@ const UserFilters = struct {
 fn listUsers(
     ctx: volt.Context,
     state: *AppState,
-    filters_query: volt.TypedQuery(UserFilters)
+    filters_query: volt.extract.TypedQuery(UserFilters)
 ) !volt.Response {
     _ = state;
 
@@ -237,7 +330,7 @@ fn indexHandler(ctx: volt.Context, state: *AppState) !volt.Response {
     return .text(ctx.request_allocator, .ok, "Hello from Volt!", null);
 }
 
-fn echoHandler(ctx: volt.Context, state: *AppState, body: volt.Json(EchoRequest)) !volt.Response {
+fn echoHandler(ctx: volt.Context, state: *AppState, body: volt.extract.Json(EchoRequest)) !volt.Response {
     _ = state;
     const request = try body.value;
     defer body.deinit(ctx.request_allocator);
@@ -270,7 +363,7 @@ pub fn main(init: std.process.Init) !void {
     try server.listen(address, .{});
 }
 
-fn webSocketHandler(ctx: volt.Context, state: *AppState, ws: volt.WebSocket) !volt.Response {
+fn webSocketHandler(ctx: volt.Context, state: *AppState, ws: volt.extract.WebSocket) !volt.Response {
     try ws.onConnected(handleConnection, .{ ctx, state });
     return ws.intoResponse();
 }
@@ -317,7 +410,7 @@ Volt is built around several key components:
 - **Server**: Generic HTTP server with async request handling
 - **Router**: Type-safe routing with automatic parameter injection
 - **Context**: Request execution context with I/O and memory resources
-- **Extract**: Automatic parameter extraction (JSON, WebSocket, Query, TypedQuery)
+- **Extract**: Automatic parameter extraction (JSON, WebSocket, Query, TypedQuery, Header, RouteParam)
 - **Response**: Unified response type for HTTP and WebSocket responses
 
 ## Status & Roadmap
@@ -331,8 +424,6 @@ This is an early-stage library. While the core routing and WebSocket functionali
 ### Planned Features
 
 - **Additional Extract Types**:
-  - Header extraction
-  - Route parameter extraction
   - Form data extraction
 
 - **Feature Flags**: Build-time feature flags in `build.zig` to include only selected features and reduce final binary size when unused features are disabled.

@@ -37,7 +37,7 @@ pub fn Server(comptime State: type) type {
         const Self = @This();
         const Router = ServerRouter(State);
         const graceful_shutdown_timeout: std.Io.Clock.Duration = .{
-            .raw = std.Io.Duration.fromSeconds(options.graceful_shutdown_timeout_seconds),
+            .raw = std.Io.Duration.fromSeconds(options.shutdown_timeout_seconds),
             .clock = .real,
         };
 
@@ -203,11 +203,12 @@ pub fn Server(comptime State: type) type {
 
         fn handleRequest(router: *const Router, ctx: Context, state: *State, req: *HttpRequest) !void {
             const target = normalizedTarget(req.head.target);
-
             const method = req.head.method;
+
+            // Fast path: exact match via hash map.
             if (router.routes.get(target)) |route_entry| {
                 if (route_entry.handlers.get(method)) |handler| {
-                    const res = handler.execute(ctx, state, req) catch |err| {
+                    const res = handler.execute(ctx, state, null, req) catch |err| {
                         if (utils.isMemberOfErrorSet(extract.WebSocketError, err)) return;
                         try req.respond(@errorName(err), .{ .status = .internal_server_error });
                         return;
@@ -216,9 +217,27 @@ pub fn Server(comptime State: type) type {
                 } else {
                     return respondNotFound(req);
                 }
-            } else {
-                return respondNotFound(req);
+                return;
             }
+
+            // Slow path: linear scan over parametric routes.
+            for (router.parametric_routes.items) |*route| {
+                if (route.match(target)) {
+                    if (route.entry.handlers.get(method)) |handler| {
+                        const res = handler.execute(ctx, state, route.pattern, req) catch |err| {
+                            if (utils.isMemberOfErrorSet(extract.WebSocketError, err)) return;
+                            try req.respond(@errorName(err), .{ .status = .internal_server_error });
+                            return;
+                        };
+                        try response.respond(req, res);
+                    } else {
+                        return respondNotFound(req);
+                    }
+                    return;
+                }
+            }
+
+            return respondNotFound(req);
         }
 
         fn normalizedTarget(target: []const u8) []const u8 {
@@ -341,4 +360,197 @@ test "handleRequest ignores websocket extractor errors" {
     try TestServer.handleRequest(&router, ctx, &state, &req);
     try stream_buf_writer.flush();
     try std.testing.expectEqual(@as(usize, 0), stream_buf_writer.end);
+}
+
+test "handleRequest prefers exact route over parametric overlap" {
+    const TestRouter = ServerRouter(void);
+    const TestServer = Server(void);
+
+    var router: TestRouter = .init(std.testing.allocator);
+    defer router.deinit();
+
+    const handlers = struct {
+        fn exact(ctx: Context, _: *void) !Response {
+            return Response.text(ctx.request_allocator, .ok, "exact", null);
+        }
+
+        fn param(ctx: Context, _: *void, id: extract.RouteParam("id")) !Response {
+            _ = id;
+            return Response.text(ctx.request_allocator, .ok, "param", null);
+        }
+    };
+
+    try router.get("/users/:id", &handlers.param);
+    try router.get("/users/me", &handlers.exact);
+
+    const req_bytes = "GET /users/me HTTP/1.1\r\n\r\n";
+    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+    var req = try http_server.receiveHead();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var state: void = {};
+    const ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request_allocator = arena.allocator(),
+    };
+
+    try TestServer.handleRequest(&router, ctx, &state, &req);
+    try stream_buf_writer.flush();
+
+    const output = write_buffer[0..stream_buf_writer.end];
+    try std.testing.expect(std.mem.indexOf(u8, output, "exact") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "param") == null);
+}
+
+test "handleRequest applies parametric precedence by literal segments" {
+    const TestRouter = ServerRouter(void);
+    const TestServer = Server(void);
+
+    var router: TestRouter = .init(std.testing.allocator);
+    defer router.deinit();
+
+    const handlers = struct {
+        fn generic(ctx: Context, _: *void, entity: extract.RouteParam("entity"), id: extract.RouteParam("id")) !Response {
+            _ = entity;
+            _ = id;
+            return Response.text(ctx.request_allocator, .ok, "generic", null);
+        }
+
+        fn users(ctx: Context, _: *void, id: extract.RouteParam("id")) !Response {
+            _ = id;
+            return Response.text(ctx.request_allocator, .ok, "users", null);
+        }
+    };
+
+    // Register generic first to ensure precedence is not registration order.
+    try router.get("/:entity/:id", &handlers.generic);
+    try router.get("/users/:id", &handlers.users);
+
+    const req_bytes = "GET /users/42 HTTP/1.1\r\n\r\n";
+    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+    var req = try http_server.receiveHead();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var state: void = {};
+    const ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request_allocator = arena.allocator(),
+    };
+
+    try TestServer.handleRequest(&router, ctx, &state, &req);
+    try stream_buf_writer.flush();
+
+    const output = write_buffer[0..stream_buf_writer.end];
+    try std.testing.expect(std.mem.indexOf(u8, output, "users") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "generic") == null);
+}
+
+test "router rejects duplicate placeholder names in same route" {
+    const TestRouter = ServerRouter(void);
+    var router: TestRouter = .init(std.testing.allocator);
+    defer router.deinit();
+
+    const handlers = struct {
+        fn duplicate(ctx: Context, _: *void, id: extract.RouteParam("id")) !Response {
+            _ = id;
+            return Response.text(ctx.request_allocator, .ok, "ok", null);
+        }
+    };
+
+    try std.testing.expectError(
+        error.DuplicateRouteParamName,
+        router.get("/users/:id/orders/:id", &handlers.duplicate),
+    );
+}
+
+test "literal colon segment is treated as exact route" {
+    const TestRouter = ServerRouter(void);
+    const TestServer = Server(void);
+
+    var router: TestRouter = .init(std.testing.allocator);
+    defer router.deinit();
+
+    const handlers = struct {
+        fn literal(ctx: Context, _: *void) !Response {
+            return Response.text(ctx.request_allocator, .ok, "literal", null);
+        }
+    };
+
+    try router.get("/time/10:30", &handlers.literal);
+
+    const req_bytes = "GET /time/10:30 HTTP/1.1\r\n\r\n";
+    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+    var req = try http_server.receiveHead();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var state: void = {};
+    const ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request_allocator = arena.allocator(),
+    };
+
+    try TestServer.handleRequest(&router, ctx, &state, &req);
+    try stream_buf_writer.flush();
+
+    const output = write_buffer[0..stream_buf_writer.end];
+    try std.testing.expect(std.mem.indexOf(u8, output, "literal") != null);
+}
+
+test "router duplicates route path keys on registration" {
+    const TestRouter = ServerRouter(void);
+    const TestServer = Server(void);
+
+    var router: TestRouter = .init(std.testing.allocator);
+    defer router.deinit();
+
+    const handlers = struct {
+        fn owned(ctx: Context, _: *void) !Response {
+            return Response.text(ctx.request_allocator, .ok, "owned", null);
+        }
+    };
+
+    var dynamic_path = [_]u8{ '/', 'd', 'y', 'n' };
+    try router.get(dynamic_path[0..], &handlers.owned);
+    dynamic_path[1] = 'x';
+
+    const req_bytes = "GET /dyn HTTP/1.1\r\n\r\n";
+    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+    var req = try http_server.receiveHead();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var state: void = {};
+    const ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request_allocator = arena.allocator(),
+    };
+
+    try TestServer.handleRequest(&router, ctx, &state, &req);
+    try stream_buf_writer.flush();
+
+    const output = write_buffer[0..stream_buf_writer.end];
+    try std.testing.expect(std.mem.indexOf(u8, output, "owned") != null);
 }
