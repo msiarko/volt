@@ -66,6 +66,20 @@ try server.router.delete("/users", &deleteUser);
 try server.router.patch("/users", &patchUser);
 ```
 
+### Route Matching Rules
+
+Volt matches routes using the following precedence rules:
+
+- Exact routes are checked before parametric routes.
+- Parametric routes use `:name` segments, for example `/users/:id`.
+- Among parametric routes, patterns with more literal segments are matched first.
+- Duplicate parameter names in a single route pattern are rejected during registration.
+
+Examples:
+
+- `/users/me` is preferred over `/users/:id` for the request `/users/me`.
+- `/users/:id` is preferred over `/:entity/:id` for the request `/users/42`.
+
 ## Automatic Parameter Injection
 
 Volt automatically extracts parameters from HTTP requests using compile-time reflection:
@@ -157,8 +171,21 @@ fn secureHandler(
 
 ### Route Parameter Extraction
 
+Route parameters are matched from parametric route patterns such as `/users/:id`.
+The router is responsible for selecting the matching handler, and `RouteParam`
+resolves the requested value from the matched route pattern and request target.
+
+Behavior notes:
+
+- Route parameter names come from `:name` segments in the registered route pattern.
+- Multiple route parameters are supported in a single route.
+- Exact routes are checked before parametric routes.
+- Among parametric routes, more literal segments take precedence over more generic patterns.
+- Duplicate parameter names in the same route pattern are rejected at registration time.
+
 ```zig
 try server.router.get("/users/:id", &getUserById);
+try server.router.get("/teams/:team_id/users/:user_id", &getTeamUser);
 
 fn getUserById(
     ctx: volt.Context,
@@ -172,6 +199,30 @@ fn getUserById(
     };
 
     return volt.Response.text(ctx.request_allocator, .ok, id, null);
+}
+
+fn getTeamUser(
+    ctx: volt.Context,
+    state: *AppState,
+    team_id: volt.extract.RouteParam("team_id"),
+    user_id: volt.extract.RouteParam("user_id")
+) !volt.Response {
+    _ = state;
+
+    const team = team_id.value orelse {
+        return volt.Response.text(ctx.request_allocator, .bad_request, "Missing route parameter: team_id", null);
+    };
+
+    const user = user_id.value orelse {
+        return volt.Response.text(ctx.request_allocator, .bad_request, "Missing route parameter: user_id", null);
+    };
+
+    return volt.Response.text(
+        ctx.request_allocator,
+        .ok,
+        try std.fmt.allocPrint(ctx.request_allocator, "team={s}, user={s}", .{ team, user }),
+        null,
+    );
 }
 ```
 
@@ -359,7 +410,7 @@ Volt is built around several key components:
 - **Server**: Generic HTTP server with async request handling
 - **Router**: Type-safe routing with automatic parameter injection
 - **Context**: Request execution context with I/O and memory resources
-- **Extract**: Automatic parameter extraction (JSON, WebSocket, Query, TypedQuery, Header)
+- **Extract**: Automatic parameter extraction (JSON, WebSocket, Query, TypedQuery, Header, RouteParam)
 - **Response**: Unified response type for HTTP and WebSocket responses
 
 ## Status & Roadmap
@@ -373,7 +424,6 @@ This is an early-stage library. While the core routing and WebSocket functionali
 ### Planned Features
 
 - **Additional Extract Types**:
-  - Route parameter extraction
   - Form data extraction
 
 - **Feature Flags**: Build-time feature flags in `build.zig` to include only selected features and reduce final binary size when unused features are disabled.
