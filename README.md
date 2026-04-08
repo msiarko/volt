@@ -70,10 +70,11 @@ Volt automatically extracts parameters from HTTP requests using compile-time ref
 
 ## Supported Extract Types
 
-- **Json(T)**: Parses request body JSON into typed structs.
-- **Query("name")**: Extracts a single query parameter by key.
-- **TypedQuery(T)**: Maps query parameters into a typed filter struct (`?[]const u8` fields).
-- **WebSocket**: Handles WebSocket upgrade requests and connection handoff.
+- **extract.Json(T)**: Parses request body JSON into typed structs.
+- **extract.Query("name")**: Extracts a single query parameter by key.
+- **extract.TypedQuery(T)**: Maps query parameters into a typed filter struct (`?[]const u8` fields).
+- **extract.Header("name")**: Extracts a single HTTP header by name.
+- **extract.WebSocket**: Handles WebSocket upgrade requests and connection handoff.
 
 ### JSON Body Parsing
 
@@ -87,7 +88,7 @@ const CreateUserRequest = struct {
 fn createUser(
     ctx: volt.Context,
     state: *AppState,
-    user_data: volt.Json(CreateUserRequest)
+    user_data: volt.extract.Json(CreateUserRequest)
 ) !volt.Response {
     const user = try user_data.value;
     defer user_data.deinit(ctx.request_allocator);
@@ -103,7 +104,7 @@ fn createUser(
 fn websocketHandler(
     ctx: volt.Context,
     state: *AppState,
-    ws: volt.WebSocket
+    ws: volt.extract.WebSocket
 ) !volt.Response {
     try ws.onConnected(handleConnection, .{ctx, state});
     return volt.webSocketResponse(ws);
@@ -121,7 +122,7 @@ fn handleConnection(ctx: volt.Context, state: *AppState, socket: *std.http.Serve
 fn findUser(
     ctx: volt.Context,
     state: *AppState,
-    user_id: volt.Query("id")
+    user_id: volt.extract.Query("id")
 ) !volt.Response {
     _ = state;
 
@@ -130,6 +131,24 @@ fn findUser(
     }
 
     return volt.Response.text(ctx.request_allocator, .bad_request, "Missing query parameter: id", null);
+}
+```
+
+### HTTP Header Extraction
+
+```zig
+fn secureHandler(
+    ctx: volt.Context,
+    state: *AppState,
+    auth: volt.extract.Header("Authorization")
+) !volt.Response {
+    _ = state;
+
+    const token = auth.value orelse {
+        return volt.Response.text(ctx.request_allocator, .unauthorized, "Missing Authorization header", null);
+    };
+
+    return volt.Response.text(ctx.request_allocator, .ok, token, null);
 }
 ```
 
@@ -145,7 +164,7 @@ const UserFilters = struct {
 fn listUsers(
     ctx: volt.Context,
     state: *AppState,
-    filters_query: volt.TypedQuery(UserFilters)
+    filters_query: volt.extract.TypedQuery(UserFilters)
 ) !volt.Response {
     _ = state;
 
@@ -237,7 +256,7 @@ fn indexHandler(ctx: volt.Context, state: *AppState) !volt.Response {
     return .text(ctx.request_allocator, .ok, "Hello from Volt!", null);
 }
 
-fn echoHandler(ctx: volt.Context, state: *AppState, body: volt.Json(EchoRequest)) !volt.Response {
+fn echoHandler(ctx: volt.Context, state: *AppState, body: volt.extract.Json(EchoRequest)) !volt.Response {
     _ = state;
     const request = try body.value;
     defer body.deinit(ctx.request_allocator);
@@ -270,7 +289,7 @@ pub fn main(init: std.process.Init) !void {
     try server.listen(address, .{});
 }
 
-fn webSocketHandler(ctx: volt.Context, state: *AppState, ws: volt.WebSocket) !volt.Response {
+fn webSocketHandler(ctx: volt.Context, state: *AppState, ws: volt.extract.WebSocket) !volt.Response {
     try ws.onConnected(handleConnection, .{ ctx, state });
     return ws.intoResponse();
 }
@@ -317,7 +336,7 @@ Volt is built around several key components:
 - **Server**: Generic HTTP server with async request handling
 - **Router**: Type-safe routing with automatic parameter injection
 - **Context**: Request execution context with I/O and memory resources
-- **Extract**: Automatic parameter extraction (JSON, WebSocket, Query, TypedQuery)
+- **Extract**: Automatic parameter extraction (JSON, WebSocket, Query, TypedQuery, Header)
 - **Response**: Unified response type for HTTP and WebSocket responses
 
 ## Status & Roadmap
@@ -331,7 +350,6 @@ This is an early-stage library. While the core routing and WebSocket functionali
 ### Planned Features
 
 - **Additional Extract Types**:
-  - Header extraction
   - Route parameter extraction
   - Form data extraction
 

@@ -52,7 +52,7 @@ pub fn Query(comptime name: []const u8) type {
 /// Compile errors:
 /// - `expected Query extractor type`: Triggered when the type doesn't match
 fn getParamName(comptime T: type) []const u8 {
-    if (!utils.matches(T, QUERY_EXTRACTOR_KEY)) {
+    if (!Resolver.matches(T)) {
         @compileError("expected Query extractor type");
     }
 

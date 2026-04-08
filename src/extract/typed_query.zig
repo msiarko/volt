@@ -100,7 +100,7 @@ pub fn TypedQuery(comptime T: type) type {
 /// Compile errors:
 /// - `expected TypedQuery extractor type`: Triggered when the type doesn't match
 fn Extracted(comptime T: type) type {
-    if (!utils.matches(T, TYPED_QUERY_EXTRACTOR_KEY)) {
+    if (!Resolver.matches(T)) {
         @compileError("expected TypedQuery extractor type");
     }
 

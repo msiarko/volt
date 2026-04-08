@@ -3,7 +3,7 @@
 //! This module provides the core infrastructure for automatically extracting
 //! parameters from HTTP requests and injecting them into handler functions.
 //! It uses compile-time reflection to identify extractor types (Json, WebSocket,
-//! Query, and TypedQuery) and pass appropriate values to handlers through a
+//! Query, TypedQuery, and Header) and pass appropriate values to handlers through a
 //! compile-time resolver registry pattern.
 
 const std = @import("std");
@@ -13,12 +13,14 @@ const json = @import("json.zig");
 const web_socket = @import("web_socket.zig");
 const query = @import("query.zig");
 const typed_query = @import("typed_query.zig");
+const header = @import("header.zig");
 
 pub const Json = json.Json;
 pub const WebSocket = web_socket.WebSocket;
 pub const WebSocketError = web_socket.WebSocketError;
 pub const Query = query.Query;
 pub const TypedQuery = typed_query.TypedQuery;
+pub const Header = header.Header;
 
 /// Compile-time collection of extractor resolvers.
 ///
@@ -32,12 +34,14 @@ const JsonResolver = json.Resolver;
 const WebSocketResolver = web_socket.Resolver;
 const QueryResolver = query.Resolver;
 const TypedQueryResolver = typed_query.Resolver;
+const HeaderResolver = header.Resolver;
 
 const extractor_resolvers = .{
     JsonResolver,
     WebSocketResolver,
     QueryResolver,
     TypedQueryResolver,
+    HeaderResolver,
 };
 
 fn getParamsTypes(func_params: []const Param) []const type {
