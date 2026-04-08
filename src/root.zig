@@ -14,6 +14,7 @@ pub const extract = struct {
 pub const Server = http.Server;
 pub const Context = http.Context;
 pub const Response = http.Response;
+pub const middleware = http.middleware;
 
 pub fn webSocketResponse(ws: extract_mod.WebSocket) Response {
     return .{ .web_socket = ws };

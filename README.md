@@ -80,6 +80,53 @@ Examples:
 - `/users/me` is preferred over `/users/:id` for the request `/users/me`.
 - `/users/:id` is preferred over `/:entity/:id` for the request `/users/42`.
 
+## Middleware
+
+Volt supports request middleware chains with compile-time signature validation and per-request isolation.
+
+Register middleware on the router by passing the middleware type:
+
+```zig
+try server.router.use(LoggerMiddleware); // Pass type, not instance
+```
+
+Each request creates a fresh middleware instance. Middleware is initialized with `Context` to allow explicit allocator choice and access to request-scoped resources:
+- `ctx.request_allocator` — request-scoped lifetime (freed at request boundary)  
+- `ctx.server_allocator` — server-wide lifetime (freed at server shutdown)
+- `ctx.io` — I/O interface for async operations
+
+Middleware contract:
+
+- `init(ctx: *Context) !Self` — Initialize with allocator choice and store references if needed
+- `handle(self: *const Self, next: *const volt.middleware.Next) !volt.Response` — Handle request
+
+Use `next.run()` to continue the chain. Returning a `Response` without calling
+`next.run()` short-circuits request processing.
+
+```zig
+const LoggerMiddleware = struct {
+    request_allocator: std.mem.Allocator,
+
+    pub fn init(ctx: *volt.Context) !@This() {
+        // Store what you need for handle() - in this case, the allocator
+        return .{ .request_allocator = ctx.request_allocator };
+    }
+
+    pub fn handle(
+        self: *const @This(),
+        next: *const volt.middleware.Next,
+    ) !volt.Response {
+        std.log.info("middleware called", .{});
+
+        var res = try next.run();
+
+        // Optional response adaptation can happen here.
+        _ = self;
+        return res;
+    }
+};
+```
+
 ## Automatic Parameter Injection
 
 Volt automatically extracts parameters from HTTP requests using compile-time reflection:

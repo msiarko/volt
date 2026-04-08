@@ -9,6 +9,7 @@ const Request = std.http.Server.Request;
 const Response = @import("response.zig").Response;
 const Context = @import("context.zig").Context;
 const extract = @import("extract");
+const middleware = @import("middleware.zig");
 
 /// Creates a generic HTTP router type parameterized by application state.
 ///
@@ -38,6 +39,9 @@ pub fn Router(comptime State: type) type {
         /// List of routes containing path parameters (e.g., `/users/:id`).
         /// Checked in precedence order (more literal segments first) after an exact match fails.
         parametric_routes: std.ArrayList(ParametricRoute),
+        /// Middleware factories for per-request instantiation.
+        /// A new middleware instance is created for each request from these factories.
+        middleware_factories: std.ArrayList(middleware.MiddlewareFactory),
 
         /// Virtual table for type-erased handler execution
         const VTable = struct {
@@ -146,6 +150,7 @@ pub fn Router(comptime State: type) type {
                 .allocator = allocator,
                 .routes = .init(allocator),
                 .parametric_routes = .empty,
+                .middleware_factories = .empty,
             };
         }
 
@@ -167,6 +172,23 @@ pub fn Router(comptime State: type) type {
                 self.allocator.free(route.pattern);
             }
             self.parametric_routes.deinit(self.allocator);
+            self.middleware_factories.deinit(self.allocator);
+        }
+
+        /// Registers middleware for all requests.
+        ///
+        /// Middleware runs for regular HTTP requests and WebSocket upgrade requests.
+        /// A fresh middleware instance is created for each request.
+        ///
+        /// Middleware must implement:
+        /// - `handle(self: *const Self, ctx: *Context, next: *const middleware.Chain.Next) !Response`
+        /// - Optional: `init(allocator: std.mem.Allocator) !Self`
+        ///
+        /// Middleware may call `next.run()` to continue the chain or return a
+        /// response directly to short-circuit request processing.
+        pub fn use(self: *Self, comptime M: type) !void {
+            const factory = middleware.Chain.makeFactory(M);
+            try self.middleware_factories.append(self.allocator, factory);
         }
 
         /// Registers a GET route handler.
