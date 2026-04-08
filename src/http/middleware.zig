@@ -50,6 +50,8 @@ pub const Chain = struct {
     /// Initializes a chain from a set of middleware factories.
     /// Each factory is called once to create a fresh middleware instance for this request.
     /// Passes Context to allow middleware to choose allocator strategy.
+    /// Any I/O operations inside middleware must use `ctx.io` to participate
+    /// correctly in the async event loop.
     pub fn initFromFactories(ctx: *Context, factories: []const MiddlewareFactory) !Self {
         const allocator = ctx.request_allocator;
         var self = Chain.init(allocator);

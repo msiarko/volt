@@ -3,11 +3,16 @@
 //! This module provides a unified Response type that can represent either
 //! regular HTTP responses or WebSocket upgrades. It includes convenience
 //! methods for creating common response types with proper headers.
+//!
+//! Design intent:
+//! - Keep response construction explicit in user code.
+//! - Let handlers and middleware choose exact status, body, and headers.
+//! - Make library behavior predictable and easy to override.
 
 const std = @import("std");
 const HttpStatus = std.http.Status;
 const HttpRequest = std.http.Server.Request;
-const WebSocket = @import("extract").WebSocket;
+const WebSocket = @import("../extract/root.zig").WebSocket;
 const HttpHeader = std.http.Header;
 
 /// Unified response type that can represent HTTP responses or WebSocket upgrades.
@@ -188,6 +193,11 @@ const HttpResponse = struct {
 /// For WebSocket responses, this function returns early (upgrade is handled
 /// by the WebSocket extractor). For HTTP responses, it delegates to the
 /// HttpResponse.into_response method.
+///
+/// Note:
+/// - When a handler/middleware error is not handled by application code,
+///   server-level fallback sends HTTP 500 with `@errorName(err)` as body.
+///   See server execution path for that behavior.
 ///
 /// Parameters:
 /// - `req`: The HTTP request to respond to

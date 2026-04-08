@@ -11,12 +11,13 @@ const ServerRouter = @import("router.zig").Router;
 const IpAddress = std.Io.net.IpAddress;
 const ListenOptions = std.Io.net.IpAddress.ListenOptions;
 const response = @import("response.zig");
-const extract = @import("extract");
+const extract = @import("../extract/root.zig");
 const utils = @import("utils.zig");
-pub const middleware = @import("middleware.zig");
+const middleware = @import("middleware.zig");
 
-pub const Context = @import("context.zig").Context;
-pub const Response = response.Response;
+const context = @import("context.zig");
+const Context = context.Context;
+const Response = response.Response;
 
 /// Creates a generic HTTP server type parameterized by application state.
 ///
@@ -180,12 +181,24 @@ pub fn Server(comptime State: type) type {
                 defer arena.deinit();
 
                 const req_allocator = arena.allocator();
+                const cache = req_allocator.create(context.Cache) catch {
+                    req.respond("OutOfMemory", .{ .status = .internal_server_error }) catch {};
+                    continue;
+                };
+                cache.* = .init(req_allocator);
                 const ctx: Context = .{
                     .io = self.io,
                     .server_allocator = self.allocator,
                     .request_allocator = req_allocator,
+                    .request = &req,
+                    ._cache = cache,
                 };
 
+                // Library-level fallback for unhandled handler/middleware errors:
+                // - status: 500 Internal Server Error
+                // - body:   @errorName(err)
+                // This keeps behavior explicit and predictable while allowing
+                // applications to map errors themselves when they want control.
                 handleRequest(&self.router, ctx, &self.state, &req) catch |err| {
                     if (err == error.ConnectionClose) break;
                     req.respond(@errorName(err), .{ .status = .internal_server_error }) catch continue;
@@ -292,10 +305,6 @@ pub fn Server(comptime State: type) type {
     };
 }
 
-test {
-    _ = std.testing.refAllDecls(utils);
-}
-
 test "handleRequest returns 404 for unknown route" {
     const TestRouter = ServerRouter(void);
     const TestServer = Server(void);
@@ -315,6 +324,7 @@ test "handleRequest returns 404 for unknown route" {
         .io = undefined,
         .server_allocator = std.testing.allocator,
         .request_allocator = std.testing.allocator,
+        .request = &req,
     };
 
     try TestServer.handleRequest(&router, ctx, &state, &req);
@@ -352,6 +362,7 @@ test "handleRequest returns 404 for method mismatch" {
         .io = undefined,
         .server_allocator = std.testing.allocator,
         .request_allocator = std.testing.allocator,
+        .request = &req,
     };
 
     try TestServer.handleRequest(&router, ctx, &state, &req);
@@ -393,6 +404,7 @@ test "handleRequest ignores websocket extractor errors" {
         .io = undefined,
         .server_allocator = std.testing.allocator,
         .request_allocator = std.testing.allocator,
+        .request = &req,
     };
 
     try TestServer.handleRequest(&router, ctx, &state, &req);
@@ -436,6 +448,7 @@ test "handleRequest prefers exact route over parametric overlap" {
         .io = undefined,
         .server_allocator = std.testing.allocator,
         .request_allocator = arena.allocator(),
+        .request = &req,
     };
 
     try TestServer.handleRequest(&router, ctx, &state, &req);
@@ -485,6 +498,7 @@ test "handleRequest applies parametric precedence by literal segments" {
         .io = undefined,
         .server_allocator = std.testing.allocator,
         .request_allocator = arena.allocator(),
+        .request = &req,
     };
 
     try TestServer.handleRequest(&router, ctx, &state, &req);
@@ -543,6 +557,7 @@ test "literal colon segment is treated as exact route" {
         .io = undefined,
         .server_allocator = std.testing.allocator,
         .request_allocator = arena.allocator(),
+        .request = &req,
     };
 
     try TestServer.handleRequest(&router, ctx, &state, &req);
@@ -584,6 +599,7 @@ test "router duplicates route path keys on registration" {
         .io = undefined,
         .server_allocator = std.testing.allocator,
         .request_allocator = arena.allocator(),
+        .request = &req,
     };
 
     try TestServer.handleRequest(&router, ctx, &state, &req);
@@ -677,6 +693,7 @@ test "middleware chain wraps next in order" {
         .io = undefined,
         .server_allocator = std.testing.allocator,
         .request_allocator = arena.allocator(),
+        .request = &req,
     };
 
     try TestServer.handleRequest(&router, ctx, &test_state, &req);
@@ -735,6 +752,7 @@ test "middleware can short-circuit and skip handler" {
         .io = undefined,
         .server_allocator = std.testing.allocator,
         .request_allocator = arena.allocator(),
+        .request = &req,
     };
 
     try TestServer.handleRequest(&router, ctx, &state, &req);
@@ -798,6 +816,7 @@ test "websocket upgrade requests run shared middleware chain" {
         .io = undefined,
         .server_allocator = std.testing.allocator,
         .request_allocator = arena.allocator(),
+        .request = &req,
     };
 
     try TestServer.handleRequest(&router, ctx, &state, &req);

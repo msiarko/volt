@@ -9,9 +9,22 @@ const std = @import("std");
 const utils = @import("utils.zig");
 const Request = std.http.Server.Request;
 const StructField = std.builtin.Type.StructField;
+const Context = @import("../http/context.zig").Context;
 
-/// Key used to identify Query extractor types at compile time.
-const QUERY_EXTRACTOR_KEY: []const u8 = "QUERY_EXTRACTOR";
+/// Extracts the configured query parameter from the request target.
+///
+/// This function parses the portion of the request URL after `?`, splits
+/// pairs by `&`, and returns the value for the configured key.
+fn initQuery(comptime name: []const u8, req: *Request) Query(name) {
+    var query_it = utils.queryIterator(req.head.target) orelse return .{ .value = null };
+    while (query_it.next()) |entry| {
+        if (std.ascii.eqlIgnoreCase(entry.key, name)) {
+            return .{ .value = entry.value };
+        }
+    }
+
+    return .{ .value = null };
+}
 
 /// Creates a Query extractor type for a specific query parameter key.
 ///
@@ -23,26 +36,35 @@ pub fn Query(comptime name: []const u8) type {
     return struct {
         const Self = @This();
 
-        /// Extractor key for type identification.
-        key: []const u8 = QUERY_EXTRACTOR_KEY,
+        /// Compile-time marker used to identify Query extractor types.
+        pub const VOLT_QUERY_EXTRACTOR = true;
+
         /// Extracted query value for `name`, or null when not available.
         value: ?[]const u8,
         /// Query parameter name this extractor resolves.
         name: []const u8 = name,
 
-        /// Extracts the configured query parameter from the request target.
+        /// Extracts the configured query parameter from request context.
         ///
-        /// This method parses the portion of the request URL after `?`, splits
-        /// pairs by `&`, and returns the value for the configured key.
-        pub fn init(req: *Request) Self {
-            var query_it = utils.queryIterator(req.head.target) orelse return .{ .value = null };
-            while (query_it.next()) |entry| {
-                if (std.ascii.eqlIgnoreCase(entry.key, name)) {
-                    return .{ .value = entry.value };
-                }
-            }
-
-            return .{ .value = null };
+        /// When a request context is available, use this method for manual extraction.
+        ///
+        /// Parameters:
+        /// - `ctx`: Request context (any type with request field). Use `ctx.io` for
+        ///   any I/O operations required within the surrounding handler.
+        ///
+        /// Returns: Query extractor with the parameter value or null
+        ///
+        /// Example usage in a handler body:
+        /// ```zig
+        /// fn search(ctx: Context, state: *MyState) !Response {
+        ///     const q = Query("q").fromContext(ctx);
+        ///     if (q.value) |search_term| {
+        ///         // Use search_term...
+        ///     }
+        /// }
+        /// ```
+        pub fn fromContext(ctx: Context) Self {
+            return initQuery(name, ctx.request);
         }
     };
 }
@@ -71,13 +93,20 @@ fn getParamName(comptime T: type) []const u8 {
 /// automatic detection and instantiation of Query extractor types during parameter resolution.
 pub const Resolver = struct {
     pub fn matches(comptime T: type) bool {
-        return utils.matches(T, QUERY_EXTRACTOR_KEY);
+        return @typeInfo(T) == .@"struct" and
+            @hasDecl(T, "VOLT_QUERY_EXTRACTOR") and
+            @field(T, "VOLT_QUERY_EXTRACTOR");
     }
 
     pub fn resolve(comptime T: type, allocator: std.mem.Allocator, req: *Request) T {
         _ = allocator;
         const param_name = comptime getParamName(T);
-        return Query(param_name).init(req);
+        return initQuery(param_name, req);
+    }
+
+    pub fn resolveWithContext(comptime T: type, ctx: Context) T {
+        const param_name = comptime getParamName(T);
+        return Query(param_name).fromContext(ctx);
     }
 };
 
@@ -108,7 +137,14 @@ test "init returns Query with value when query parameter is present" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const query = Query("name").init(&http_req);
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request_allocator = std.testing.allocator,
+        .request = &http_req,
+        ._cache = null,
+    };
+    const query = Query("name").fromContext(test_ctx);
 
     try std.testing.expect(query.value != null);
     try std.testing.expectEqualStrings("Ziggy", query.value.?);
@@ -124,7 +160,14 @@ test "init returns Query with value when multiple query parameters are present" 
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const query = Query("age").init(&http_req);
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request_allocator = std.testing.allocator,
+        .request = &http_req,
+        ._cache = null,
+    };
+    const query = Query("age").fromContext(test_ctx);
 
     try std.testing.expect(query.value != null);
     try std.testing.expectEqualStrings("30", query.value.?);
@@ -140,7 +183,14 @@ test "init returns Query without value when query parameter is not present" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const query = Query("nonexistent").init(&http_req);
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request_allocator = std.testing.allocator,
+        .request = &http_req,
+        ._cache = null,
+    };
+    const query = Query("nonexistent").fromContext(test_ctx);
 
     try std.testing.expectEqual(null, query.value);
 }
@@ -155,7 +205,14 @@ test "init returns Query without value when query parameter is present but has n
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const query = Query("name").init(&http_req);
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request_allocator = std.testing.allocator,
+        .request = &http_req,
+        ._cache = null,
+    };
+    const query = Query("name").fromContext(test_ctx);
 
     try std.testing.expectEqual(null, query.value);
 }
@@ -170,7 +227,14 @@ test "init returns Query without value when query string is missing" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const query = Query("name").init(&http_req);
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request_allocator = std.testing.allocator,
+        .request = &http_req,
+        ._cache = null,
+    };
+    const query = Query("name").fromContext(test_ctx);
 
     try std.testing.expectEqual(null, query.value);
 }
@@ -196,7 +260,14 @@ test "init table-driven query extraction" {
         var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
         var http_req = try http_server.receiveHead();
 
-        const query = Query("name").init(&http_req);
+        const test_ctx: Context = .{
+            .io = undefined,
+            .server_allocator = std.testing.allocator,
+            .request_allocator = std.testing.allocator,
+            .request = &http_req,
+            ._cache = null,
+        };
+        const query = Query("name").fromContext(test_ctx);
         if (case.expected) |expected| {
             try std.testing.expectEqualStrings(expected, query.value.?);
         } else {

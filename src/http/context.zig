@@ -5,6 +5,14 @@
 //! allocations from request-scoped allocations using different allocators.
 
 const std = @import("std");
+const Request = std.http.Server.Request;
+
+/// Per-request memoization cache for owning extractors (Json, TypedQuery).
+///
+/// Since owning extractors parse and allocate, repeated calls for the same type
+/// within one request reuse the already-parsed result rather than parsing again.
+/// Keys are comptime type-name strings; values are opaque pointers to parsed data.
+pub const Cache = std.StringHashMap(*anyopaque);
 
 /// Execution context passed to all HTTP request handlers.
 ///
@@ -12,65 +20,62 @@ const std = @import("std");
 /// - I/O interface for network operations
 /// - General-purpose allocator for persistent data
 /// - Arena allocator for request-scoped temporary allocations
+/// - Raw request pointer for manual extractor usage
+/// - Optional memoization cache for owning extractors
 ///
 /// This separation allows for efficient memory management where temporary
 /// request data can be freed at the end of each request while persistent
 /// data remains allocated.
 ///
+/// **I/O:** All I/O operations within handlers and middleware must use `ctx.io`
+/// rather than obtaining a separate I/O handle. This ensures correct participation
+/// in the async event loop and proper cancellation support.
+///
 /// Example usage in a handler:
 /// ```zig
 /// fn myHandler(ctx: Context, state: *MyState) !Response {
-///     // Use ctx.request_allocator for temporary JSON parsing
-///     const parsed = try std.json.parseFromSlice(MyStruct, ctx.request_allocator, body, .{});
+///     // Automatic extraction via parameter type:
+///     // fn myHandler(ctx: Context, state: *MyState, body: Json(MyStruct)) !Response
 ///
-///     // Use ctx.server_allocator for data that needs to persist beyond the request
-///     const persistent_data = try ctx.server_allocator.dupe(u8, some_data);
+///     // Manual extraction for full control:
+///     const body = extract.Json(MyStruct).fromContext(ctx);
 ///
-///     // Use ctx.io for any I/O operations if needed
-///     _ = ctx.io; // Usually handled by extract/library code
+///     // Use ctx.server_allocator for data that must outlive the request
+///     const persistent = try ctx.server_allocator.dupe(u8, some_data);
+///     _ = persistent; // caller must free this
 ///
 ///     return Response.json(ctx.request_allocator, .ok, "success", null);
 /// }
 /// ```
 pub const Context = struct {
+    /// Compile-time marker used by the extractor system to identify request
+    /// context types without a cross-module import. Do not use directly.
+    pub const VOLT_REQUEST_CONTEXT = true;
+
     /// I/O interface for network operations and async I/O.
-    /// This is typically used internally by the library but
-    /// can be accessed by handlers that need direct I/O control.
     io: std.Io,
 
-    /// An allocator for persistent allocations.
-    /// Use this for data that needs to live beyond the current request,
-    /// such as cached data, database connections, or shared state.
-    ///
-    /// Memory allocated with server_allocator should be manually freed when no
-    /// longer needed, or it will persist for the lifetime of the server.
+    /// Allocator for persistent allocations that must outlive the request.
+    /// Memory allocated here must be manually freed.
     server_allocator: std.mem.Allocator,
 
-    /// Arena allocator for request-scoped temporary allocations.
-    /// All memory allocated with the arena is automatically freed
-    /// at the end of the request, making it ideal for temporary
-    /// parsing, string manipulation, and other ephemeral data.
-    ///
-    /// This is the preferred allocator for most handler operations
-    /// as it provides automatic cleanup and reduces memory management overhead.
+    /// Arena allocator scoped to the current request.
+    /// All memory is freed automatically at the end of the request.
+    /// Preferred for most handler operations.
     request_allocator: std.mem.Allocator,
 
-    /// Creates a new Context instance.
+    /// Raw HTTP request. Valid only for the lifetime of the current request.
+    /// Use this to call extractors manually inside handler bodies:
     ///
-    /// Parameters:
-    /// - `io`: I/O interface for network operations
-    /// - `persistence`: General-purpose allocator for persistent allocations
-    /// - `arena`: Request-scoped allocator for temporary allocations
+    ///     const body = extract.Json(MyType).fromContext(ctx);
+    ///     const q    = extract.Query("name").fromContext(ctx);
     ///
-    /// Returns: Initialized Context ready for use in handlers
-    ///
-    /// Note: The parameter names use 'persistence' to clarify the allocator's role,
-    /// and the Context fields are named for their intended lifetime.
-    pub fn init(io: std.Io, persistence: std.mem.Allocator, arena: std.mem.Allocator) @This() {
-        return .{
-            .request_allocator = arena,
-            .server_allocator = persistence,
-            .io = io,
-        };
-    }
+    /// Do not store this pointer in state that outlives the request.
+    request: *Request,
+
+    /// Per-request memoization cache for owning extractors (Json, TypedQuery).
+    /// Internal use only. When set, a second extraction of the same type within
+    /// one request returns the already-parsed result at zero extra cost.
+    /// Null when context was created without cache support (e.g., in unit tests).
+    _cache: ?*Cache = null,
 };

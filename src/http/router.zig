@@ -8,7 +8,7 @@ const std = @import("std");
 const Request = std.http.Server.Request;
 const Response = @import("response.zig").Response;
 const Context = @import("context.zig").Context;
-const extract = @import("extract");
+const extract = @import("../extract/root.zig");
 const middleware = @import("middleware.zig");
 
 /// Creates a generic HTTP router type parameterized by application state.

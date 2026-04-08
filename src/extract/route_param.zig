@@ -7,11 +7,13 @@
 
 const std = @import("std");
 const Request = std.http.Server.Request;
-const utils = @import("utils.zig");
 const StructField = std.builtin.Type.StructField;
 
-/// Key used to identify RouteParam extractor types at compile time.
-const ROUTE_PARAM_EXTRACTOR_KEY: []const u8 = "ROUTE_PARAM_EXTRACTOR";
+/// Extracts the configured path parameter by comparing the matched
+/// route pattern (e.g., `/users/:id`) against the request target.
+fn initRouteParam(comptime name: []const u8, route_pattern: ?[]const u8, req: *Request) RouteParam(name) {
+    return .{ .value = resolveValue(name, route_pattern, req.head.target) };
+}
 
 /// Creates a RouteParam extractor type for a specific path parameter name.
 ///
@@ -31,18 +33,13 @@ pub fn RouteParam(comptime name: []const u8) type {
     return struct {
         const Self = @This();
 
-        /// Extractor key for type identification.
-        key: []const u8 = ROUTE_PARAM_EXTRACTOR_KEY,
+        /// Compile-time marker used to identify RouteParam extractor types.
+        pub const VOLT_ROUTE_PARAM_EXTRACTOR = true;
+
         /// Path parameter name this extractor resolves.
         name: []const u8 = name,
         /// Captured value of the path segment, or null when not present.
         value: ?[]const u8,
-
-        /// Extracts the configured path parameter by comparing the matched
-        /// route pattern (e.g., `/users/:id`) against the request target.
-        pub fn init(route_pattern: ?[]const u8, req: *Request) Self {
-            return .{ .value = resolveValue(name, route_pattern, req.head.target) };
-        }
     };
 }
 
@@ -98,13 +95,15 @@ fn getParamName(comptime T: type) []const u8 {
 /// Resolver for RouteParam extractors in the compile-time registry.
 pub const Resolver = struct {
     pub fn matches(comptime T: type) bool {
-        return utils.matches(T, ROUTE_PARAM_EXTRACTOR_KEY);
+        return @typeInfo(T) == .@"struct" and
+            @hasDecl(T, "VOLT_ROUTE_PARAM_EXTRACTOR") and
+            @field(T, "VOLT_ROUTE_PARAM_EXTRACTOR");
     }
 
     pub fn resolve(comptime T: type, allocator: std.mem.Allocator, route_pattern: ?[]const u8, req: *Request) T {
         _ = allocator;
         const param_name = comptime getParamName(T);
-        return RouteParam(param_name).init(route_pattern, req);
+        return initRouteParam(param_name, route_pattern, req);
     }
 };
 
@@ -125,7 +124,7 @@ test "RouteParam.init returns value when key matches" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const result = RouteParam("id").init("/users/:id", &http_req);
+    const result = initRouteParam("id", "/users/:id", &http_req);
     try std.testing.expectEqualStrings("42", result.value.?);
 }
 
@@ -137,7 +136,7 @@ test "RouteParam.init returns null when key is absent" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const result = RouteParam("id").init("/accounts/:name", &http_req);
+    const result = initRouteParam("id", "/accounts/:name", &http_req);
     try std.testing.expect(result.value == null);
 }
 
@@ -149,8 +148,8 @@ test "RouteParam.init resolves multiple params from one pattern" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const team_id = RouteParam("team_id").init("/teams/:team_id/users/:user_id", &http_req);
-    const user_id = RouteParam("user_id").init("/teams/:team_id/users/:user_id", &http_req);
+    const team_id = initRouteParam("team_id", "/teams/:team_id/users/:user_id", &http_req);
+    const user_id = initRouteParam("user_id", "/teams/:team_id/users/:user_id", &http_req);
 
     try std.testing.expectEqualStrings("abc", team_id.value.?);
     try std.testing.expectEqualStrings("42", user_id.value.?);
