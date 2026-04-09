@@ -4,7 +4,10 @@ const Response = @import("response.zig").Response;
 
 /// Factory function that creates a fresh middleware Entry.
 /// Called once per request to instantiate a new middleware with isolated state.
-/// Receives Context to allow middleware to choose allocator (request-scoped or server-wide).
+/// Middleware instance storage is request-scoped; this function allocates the
+/// middleware struct with `ctx.request_allocator`.
+/// Context is passed so middleware can choose allocator strategy for any
+/// additional internal allocations (request-scoped or server-wide).
 pub const MiddlewareFactory = *const fn (ctx: *Context) anyerror!Entry;
 
 pub const Entry = struct {
@@ -49,7 +52,8 @@ pub const Chain = struct {
 
     /// Initializes a chain from a set of middleware factories.
     /// Each factory is called once to create a fresh middleware instance for this request.
-    /// Passes Context to allow middleware to choose allocator strategy.
+    /// Middleware instance storage is request-scoped.
+    /// Context still allows middleware internals to choose allocator strategy.
     /// Any I/O operations inside middleware must use `ctx.io` to participate
     /// correctly in the async event loop.
     pub fn initFromFactories(ctx: *Context, factories: []const MiddlewareFactory) !Self {
@@ -162,7 +166,10 @@ pub const Chain = struct {
     /// Creates a factory function for the given middleware type M.
     /// The factory creates fresh instances of M for each request.
     /// Middleware must implement: init(ctx: *Context) !Self
-    /// This forces middleware to be explicit about allocator choice via Context.
+    /// The middleware instance itself is always allocated with
+    /// `ctx.request_allocator`.
+    /// `init` receives Context so middleware can allocate and store additional
+    /// internal data with either request or server lifetime as needed.
     pub fn makeFactory(comptime M: type) MiddlewareFactory {
         comptime validateMiddlewareType(M);
         comptime validateInitSignature(M);

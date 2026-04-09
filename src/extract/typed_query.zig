@@ -472,7 +472,7 @@ test "init table-driven typed query extraction" {
     }
 }
 
-test "init decodes encoded typed query keys and values" {
+test "init decodes encoded typed query values" {
     const Filters = struct {
         first_name: ?[]const u8,
         role: ?[]const u8,

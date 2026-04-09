@@ -7,14 +7,13 @@
 
 const std = @import("std");
 const Request = std.http.Server.Request;
-const StructField = std.builtin.Type.StructField;
 const Context = @import("../http/context.zig").Context;
 
 /// Extracts and parses JSON from an HTTP request body.
 ///
 /// This function reads the request body, parses it as JSON, and converts
-/// it to the target type T. String fields are automatically duplicated
-/// to ensure they remain valid beyond the request.
+/// it to the target type T. Parsed allocations are kept alive by the
+/// extractor and released in `Json.deinit`.
 ///
 /// Parameters:
 /// - `T`: The target type to deserialize into
@@ -65,28 +64,25 @@ fn initJson(comptime T: type, allocator: std.mem.Allocator, req: *Request) Json(
         return .{ .value = error.InvalidJson };
     }
 
-    const parsed = std.json.parseFromSlice(T, allocator, data, .{}) catch |err| return .{ .value = err };
-    defer parsed.deinit();
+    const parsed = allocator.create(std.json.Parsed(T)) catch |err| return .{ .value = err };
+    errdefer allocator.destroy(parsed);
+
+    parsed.* = std.json.parseFromSlice(T, allocator, data, .{ .allocate = .alloc_always }) catch |err| return .{ .value = err };
+    errdefer parsed.deinit();
 
     const value = allocator.create(T) catch |err| return .{ .value = err };
     errdefer allocator.destroy(value);
 
     value.* = parsed.value;
-    inline for (@typeInfo(T).@"struct".fields) |field| {
-        if (field.type == []const u8) {
-            const original_slice = @field(parsed.value, field.name);
-            @field(value.*, field.name) = allocator.dupe(u8, original_slice) catch |err| return .{ .value = err };
-        }
-    }
 
-    return .{ .value = value };
+    return .{ .value = value, .parsed = parsed };
 }
 
 /// Creates a JSON extractor type for automatic deserialization.
 ///
 /// This generic type provides automatic JSON parsing from HTTP request bodies.
-/// The extractor handles reading the request body, parsing JSON, and managing
-/// memory for string fields that need to be duplicated.
+/// The extractor handles reading the request body, parsing JSON, and keeping
+/// parsed allocations alive until `deinit`.
 ///
 /// Parameters:
 /// - `T`: The target type to deserialize JSON into
@@ -117,6 +113,10 @@ pub fn Json(comptime T: type) type {
         /// The extracted value or an error
         value: anyerror!*T,
 
+        /// Backing parsed object that owns all nested allocations produced by
+        /// std.json.parseFromSlice. Present only for owning instances.
+        parsed: ?*std.json.Parsed(T) = null,
+
         /// Tracks whether this instance owns the extracted data.
         /// Cache hits are non-owning and should not call destroy().
         owns_data: bool = true,
@@ -135,10 +135,10 @@ pub fn Json(comptime T: type) type {
             if (!self.owns_data) return; // Cache hit: no-op deinit
 
             const value = self.value catch return;
-            inline for (@typeInfo(T).@"struct".fields) |field| {
-                if (field.type == []const u8) {
-                    allocator.free(@field(value.*, field.name));
-                }
+
+            if (self.parsed) |parsed| {
+                parsed.deinit();
+                allocator.destroy(parsed);
             }
 
             allocator.destroy(value);

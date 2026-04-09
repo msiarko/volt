@@ -279,8 +279,9 @@ pub fn Server(comptime State: type) type {
                 return;
             }
 
-            // Create a fresh middleware chain for this request
-            // Middleware can choose allocator via Context
+            // Create a fresh middleware chain for this request.
+            // Middleware instances are request-scoped; internals can choose
+            // request/server allocators via Context.
             var middleware_ctx = ctx;
             var chain = try middleware.Chain.initFromFactories(&middleware_ctx, router.middleware_factories.items);
             defer chain.deinit();

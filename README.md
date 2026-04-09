@@ -113,7 +113,9 @@ Register middleware on the router by passing the middleware type:
 try server.router.use(LoggerMiddleware); // Pass type, not instance
 ```
 
-Each request creates a fresh middleware instance. Middleware is initialized with `Context` to allow explicit allocator choice and access to request-scoped resources:
+Each request creates a fresh middleware instance.
+The middleware struct instance itself is request-scoped (allocated with `ctx.request_allocator` by the framework).
+`Context` lets middleware choose allocator scope for any additional internal allocations and gives access to request-scoped resources:
 - `ctx.request_allocator` — request-scoped lifetime (freed at request boundary)  
 - `ctx.server_allocator` — server-wide lifetime (freed at server shutdown)
 - `ctx.io` — I/O interface for async operations
