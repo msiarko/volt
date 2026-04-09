@@ -105,25 +105,15 @@ pub fn TypedQuery(comptime T: type) type {
         /// Parsed query object, null when no non-empty keys were matched.
         value: anyerror!?*T,
 
-        /// Tracks whether this instance owns the extracted data.
-        /// Cache hits are non-owning and should not call destroy().
-        owns_data: bool = true,
-
         /// Releases typed query storage.
-        ///
-        /// This method is only effective if this instance owns the data (not a cache hit).
-        /// Cache hit instances have no-op deinit to prevent double-free.
         ///
         /// Parameters:
         /// - `self`: TypedQuery extractor instance
         /// - `arena`: The allocator used for extraction
         ///
-        /// This method is a no-op when extraction resulted in `null` or an error,
-        /// or when this instance is a cache hit.
+        /// This method is a no-op when extraction resulted in `null` or an error.
         /// Call this once the extracted query object is no longer needed.
         pub fn deinit(self: *Self, arena: std.mem.Allocator) void {
-            if (!self.owns_data) return; // Cache hit: no-op deinit
-
             const val = self.value catch return;
             if (val) |v| {
                 freeTypedQueryFields(T, arena, v);
@@ -134,13 +124,8 @@ pub fn TypedQuery(comptime T: type) type {
         /// Extracts and parses query from request context.
         ///
         /// When a request context is available, use this method for manual extraction.
-        /// The context provides access to the request and per-request caching;
-        /// repeated extractions during the same request reuse the parsed result.
-        ///
-        /// Ownership semantics:
-        /// - With request cache enabled, all extracted instances are non-owning.
-        ///   Data is request-scoped and remains stable for the request lifetime.
-        /// - Without request cache, the instance owns extracted data and should call deinit().
+        /// Each call returns a fresh owning extractor instance with independent
+        /// allocations. Call `deinit` once for each successful extraction.
         ///
         /// Parameters:
         /// - `ctx`: Request context (any type with request and request_allocator fields).
@@ -159,33 +144,7 @@ pub fn TypedQuery(comptime T: type) type {
         /// }
         /// ```
         pub fn fromContext(ctx: Context) Self {
-            const key = "typed_query:" ++ @typeName(T);
-            if (ctx._cache) |cache| {
-                if (cache.get(key)) |cached| {
-                    // Cache hit: return non-owning instance
-                    return .{
-                        .value = @as(*T, @ptrCast(@alignCast(cached))),
-                        .owns_data = false,
-                    };
-                }
-            }
-
-            var self = initTypedQuery(T, ctx.request_allocator, ctx.request);
-
-            // When request cache is enabled, extracted values are request-scoped and
-            // should not be individually freed by extractor instances.
-            if (ctx._cache) |cache| {
-                self.owns_data = false;
-                if (self.value) |val| {
-                    if (val) |v| {
-                        cache.put(key, v) catch {};
-                    }
-                } else |_| {}
-            } else {
-                self.owns_data = true;
-            }
-
-            return self;
+            return initTypedQuery(T, ctx.request_allocator, ctx.request);
         }
     };
 }
@@ -279,7 +238,6 @@ test "init returns TypedQuery with values when matching parameters are present" 
         .server_allocator = std.testing.allocator,
         .request = &http_req,
         .request_allocator = allocator,
-        ._cache = null,
     };
 
     var typed_query = TypedQuery(Filters).fromContext(test_ctx);
@@ -311,7 +269,6 @@ test "init returns TypedQuery with partial values when some parameters are missi
         .server_allocator = std.testing.allocator,
         .request = &http_req,
         .request_allocator = allocator,
-        ._cache = null,
     };
 
     var typed_query = TypedQuery(Filters).fromContext(test_ctx);
@@ -343,7 +300,6 @@ test "init returns null when query string is missing" {
         .server_allocator = std.testing.allocator,
         .request = &http_req,
         .request_allocator = allocator,
-        ._cache = null,
     };
 
     var typed_query = TypedQuery(Filters).fromContext(test_ctx);
@@ -373,7 +329,6 @@ test "init returns null when query string is empty" {
         .server_allocator = std.testing.allocator,
         .request = &http_req,
         .request_allocator = allocator,
-        ._cache = null,
     };
 
     var typed_query = TypedQuery(Filters).fromContext(test_ctx);
@@ -403,7 +358,6 @@ test "init returns null when all matching parameters are empty" {
         .server_allocator = std.testing.allocator,
         .request = &http_req,
         .request_allocator = allocator,
-        ._cache = null,
     };
 
     var typed_query = TypedQuery(Filters).fromContext(test_ctx);
@@ -445,7 +399,6 @@ test "init table-driven typed query extraction" {
             .server_allocator = std.testing.allocator,
             .request = &http_req,
             .request_allocator = std.testing.allocator,
-            ._cache = null,
         };
 
         var typed_query = TypedQuery(Filters).fromContext(test_ctx);
@@ -495,7 +448,6 @@ test "init decodes encoded typed query values" {
         .server_allocator = std.testing.allocator,
         .request = &http_req,
         .request_allocator = arena.allocator(),
-        ._cache = null,
     };
 
     var typed_query = TypedQuery(Filters).fromContext(test_ctx);
@@ -528,7 +480,6 @@ test "init returns error for malformed encoded typed query value" {
         .server_allocator = std.testing.allocator,
         .request = &http_req,
         .request_allocator = arena.allocator(),
-        ._cache = null,
     };
 
     var typed_query = TypedQuery(Filters).fromContext(test_ctx);
@@ -559,7 +510,6 @@ test "init decodes double-encoded typed query value only once" {
         .server_allocator = std.testing.allocator,
         .request = &http_req,
         .request_allocator = arena.allocator(),
-        ._cache = null,
     };
 
     var typed_query = TypedQuery(Filters).fromContext(test_ctx);
@@ -591,7 +541,6 @@ test "init does not match encoded typed query keys" {
         .server_allocator = std.testing.allocator,
         .request = &http_req,
         .request_allocator = arena.allocator(),
-        ._cache = null,
     };
 
     var typed_query = TypedQuery(Filters).fromContext(test_ctx);
@@ -600,7 +549,7 @@ test "init does not match encoded typed query keys" {
     try std.testing.expectEqual(null, try typed_query.value);
 }
 
-test "fromContext keeps cached typed query stable after deinit" {
+test "fromContext returns independent owning typed query instances" {
     const Filters = struct {
         name: ?[]const u8,
         age: ?[]const u8,
@@ -608,9 +557,6 @@ test "fromContext keeps cached typed query stable after deinit" {
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-
-    var cache = @import("../http/context.zig").Cache.init(std.testing.allocator);
-    defer cache.deinit();
 
     const req_bytes = std.fmt.comptimePrint("GET /users?name=Ziggy&age=30 HTTP/1.1\r\n\r\n", .{});
     var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
@@ -626,20 +572,19 @@ test "fromContext keeps cached typed query stable after deinit" {
         .server_allocator = std.testing.allocator,
         .request = &http_req,
         .request_allocator = arena.allocator(),
-        ._cache = &cache,
     };
 
     var first = TypedQuery(Filters).fromContext(test_ctx);
-    try std.testing.expect(!first.owns_data);
-
-    // Should be a no-op for cached instances.
-    first.deinit(arena.allocator());
+    defer first.deinit(arena.allocator());
 
     var second = TypedQuery(Filters).fromContext(test_ctx);
     defer second.deinit(arena.allocator());
-    try std.testing.expect(!second.owns_data);
 
-    const filters = (try second.value) orelse unreachable;
-    try std.testing.expectEqualStrings("Ziggy", filters.name.?);
-    try std.testing.expectEqualStrings("30", filters.age.?);
+    const first_filters = (try first.value) orelse unreachable;
+    const second_filters = (try second.value) orelse unreachable;
+
+    try std.testing.expect(@intFromPtr(first_filters) != @intFromPtr(second_filters));
+
+    try std.testing.expectEqualStrings("Ziggy", second_filters.name.?);
+    try std.testing.expectEqualStrings("30", second_filters.age.?);
 }

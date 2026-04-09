@@ -201,8 +201,8 @@ test "init returns NotWebSocketUpgrade for regular HTTP request" {
         .server_allocator = std.testing.allocator,
         .request_allocator = std.testing.allocator,
         .request = &http_req,
-        ._cache = null,
     };
     const ws = WebSocket.fromContext(test_ctx);
     try std.testing.expectError(WebSocketError.NotWebSocketUpgrade, ws.socket);
 }
+

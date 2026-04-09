@@ -152,7 +152,6 @@ test "init returns Header with value when header is present" {
         .server_allocator = std.testing.allocator,
         .request_allocator = std.testing.allocator,
         .request = &http_req,
-        ._cache = null,
     };
     const header = Header("Authorization").fromContext(test_ctx);
 
@@ -175,7 +174,6 @@ test "init returns Header with value when multiple headers are present" {
         .server_allocator = std.testing.allocator,
         .request_allocator = std.testing.allocator,
         .request = &http_req,
-        ._cache = null,
     };
     const header = Header("X-Request-Id").fromContext(test_ctx);
 
@@ -198,7 +196,6 @@ test "init returns null when header is not present" {
         .server_allocator = std.testing.allocator,
         .request_allocator = std.testing.allocator,
         .request = &http_req,
-        ._cache = null,
     };
     const header = Header("Authorization").fromContext(test_ctx);
 
@@ -220,7 +217,6 @@ test "init returns null when no headers are present" {
         .server_allocator = std.testing.allocator,
         .request_allocator = std.testing.allocator,
         .request = &http_req,
-        ._cache = null,
     };
     const header = Header("Authorization").fromContext(test_ctx);
 
@@ -252,7 +248,6 @@ test "init table-driven header extraction" {
             .server_allocator = std.testing.allocator,
             .request_allocator = std.testing.allocator,
             .request = &http_req,
-            ._cache = null,
         };
         const header = Header("Authorization").fromContext(test_ctx);
 
@@ -263,3 +258,4 @@ test "init table-driven header extraction" {
         }
     }
 }
+

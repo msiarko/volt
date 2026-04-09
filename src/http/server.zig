@@ -181,17 +181,11 @@ pub fn Server(comptime State: type) type {
                 defer arena.deinit();
 
                 const req_allocator = arena.allocator();
-                const cache = req_allocator.create(context.Cache) catch {
-                    req.respond("OutOfMemory", .{ .status = .internal_server_error }) catch {};
-                    continue;
-                };
-                cache.* = .init(req_allocator);
                 const ctx: Context = .{
                     .io = self.io,
                     .server_allocator = self.allocator,
                     .request_allocator = req_allocator,
                     .request = &req,
-                    ._cache = cache,
                 };
 
                 // Library-level fallback for unhandled handler/middleware errors:

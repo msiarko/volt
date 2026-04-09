@@ -17,7 +17,7 @@ const Context = @import("../http/context.zig").Context;
 ///
 /// Parameters:
 /// - `T`: The target type to deserialize into
-/// - `allocator`: Allocator for parsed data and string duplication
+/// - `allocator`: Allocator for parsed data
 /// - `req`: HTTP request containing the JSON body
 ///
 /// Returns: Json extractor with parsed value or error
@@ -70,12 +70,7 @@ fn initJson(comptime T: type, allocator: std.mem.Allocator, req: *Request) Json(
     parsed.* = std.json.parseFromSlice(T, allocator, data, .{ .allocate = .alloc_always }) catch |err| return .{ .value = err };
     errdefer parsed.deinit();
 
-    const value = allocator.create(T) catch |err| return .{ .value = err };
-    errdefer allocator.destroy(value);
-
-    value.* = parsed.value;
-
-    return .{ .value = value, .parsed = parsed };
+    return .{ .value = &parsed.value, .parsed = parsed };
 }
 
 /// Creates a JSON extractor type for automatic deserialization.
@@ -114,17 +109,10 @@ pub fn Json(comptime T: type) type {
         value: anyerror!*T,
 
         /// Backing parsed object that owns all nested allocations produced by
-        /// std.json.parseFromSlice. Present only for owning instances.
+        /// std.json.parseFromSlice.
         parsed: ?*std.json.Parsed(T) = null,
 
-        /// Tracks whether this instance owns the extracted data.
-        /// Cache hits are non-owning and should not call destroy().
-        owns_data: bool = true,
-
         /// Cleans up resources allocated during JSON extraction.
-        ///
-        /// This method is only effective if this instance owns the data (not a cache hit).
-        /// Cache hit instances have no-op deinit to prevent double-free.
         ///
         /// Parameters:
         /// - `allocator`: The same allocator used for extraction
@@ -132,28 +120,19 @@ pub fn Json(comptime T: type) type {
         /// This should be called when the extracted JSON data is no longer needed.
         /// If extraction failed (value is an error), this is a no-op.
         pub fn deinit(self: Self, allocator: std.mem.Allocator) void {
-            if (!self.owns_data) return; // Cache hit: no-op deinit
-
-            const value = self.value catch return;
+            _ = self.value catch return;
 
             if (self.parsed) |parsed| {
                 parsed.deinit();
                 allocator.destroy(parsed);
             }
-
-            allocator.destroy(value);
         }
 
         /// Extracts and parses JSON from request context.
         ///
         /// When a request context is available, use this method for manual extraction.
-        /// The context provides access to the request and per-request caching;
-        /// repeated extractions during the same request reuse the parsed result.
-        ///
-        /// Ownership semantics:
-        /// - With request cache enabled, all extracted instances are non-owning.
-        ///   Data is request-scoped and remains stable for the request lifetime.
-        /// - Without request cache, the instance owns extracted data and should call deinit().
+        /// Each call returns a fresh owning extractor instance with independent
+        /// allocations. Call `deinit` once for each successful extraction.
         ///
         /// Parameters:
         /// - `ctx`: Request context (any type with request and request_allocator fields).
@@ -171,31 +150,7 @@ pub fn Json(comptime T: type) type {
         /// }
         /// ```
         pub fn fromContext(ctx: Context) Self {
-            const key = "json:" ++ @typeName(T);
-            if (ctx._cache) |cache| {
-                if (cache.get(key)) |cached| {
-                    // Cache hit: return non-owning instance
-                    return .{
-                        .value = @as(*T, @ptrCast(@alignCast(cached))),
-                        .owns_data = false,
-                    };
-                }
-            }
-
-            var self = initJson(T, ctx.request_allocator, ctx.request);
-
-            // When request cache is enabled, extracted values are request-scoped and
-            // should not be individually freed by extractor instances.
-            if (ctx._cache) |cache| {
-                self.owns_data = false;
-                if (self.value) |val| {
-                    cache.put(key, val) catch {};
-                } else |_| {}
-            } else {
-                self.owns_data = true;
-            }
-
-            return self;
+            return initJson(T, ctx.request_allocator, ctx.request);
         }
     };
 }
@@ -262,7 +217,6 @@ test "extract returns Json when request is valid" {
         .server_allocator = std.testing.allocator,
         .request = &http_req,
         .request_allocator = allocator,
-        ._cache = null,
     };
 
     const json = Json(Person).fromContext(test_ctx);
@@ -300,7 +254,6 @@ test "extract fails when content type is missing" {
         .server_allocator = std.testing.allocator,
         .request = &http_req,
         .request_allocator = allocator,
-        ._cache = null,
     };
 
     const json = Json(Person).fromContext(test_ctx);
@@ -338,7 +291,6 @@ test "extract fails when content type is not application/json" {
         .server_allocator = std.testing.allocator,
         .request = &http_req,
         .request_allocator = allocator,
-        ._cache = null,
     };
 
     const json = Json(Person).fromContext(test_ctx);
@@ -375,7 +327,6 @@ test "extract fails when content length is missing" {
         .server_allocator = std.testing.allocator,
         .request = &http_req,
         .request_allocator = allocator,
-        ._cache = null,
     };
 
     const json = Json(Person).fromContext(test_ctx);
@@ -411,7 +362,6 @@ test "extract fails when content length is zero" {
         .server_allocator = std.testing.allocator,
         .request = &http_req,
         .request_allocator = allocator,
-        ._cache = null,
     };
 
     const json = Json(Person).fromContext(test_ctx);
@@ -448,7 +398,7 @@ test "matches returns false for non-Json extractor" {
     try std.testing.expect(!comptime Resolver.matches(Person));
 }
 
-test "fromContext keeps cached json stable after deinit" {
+test "fromContext returns owning Json extractor" {
     const Person = struct {
         name: []const u8,
         age: u7,
@@ -456,9 +406,6 @@ test "fromContext keeps cached json stable after deinit" {
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-
-    var cache = @import("../http/context.zig").Cache.init(std.testing.allocator);
-    defer cache.deinit();
 
     const body = "{\"name\":\"Ziggy\",\"age\":15}";
     const req_bytes = std.fmt.comptimePrint("POST /person HTTP/1.1\r\n" ++
@@ -480,20 +427,13 @@ test "fromContext keeps cached json stable after deinit" {
         .server_allocator = std.testing.allocator,
         .request = &http_req,
         .request_allocator = arena.allocator(),
-        ._cache = &cache,
     };
 
     const first = Json(Person).fromContext(test_ctx);
-    try std.testing.expect(!first.owns_data);
+    defer first.deinit(arena.allocator());
 
-    // Should be a no-op for cached instances.
-    first.deinit(arena.allocator());
-
-    const second = Json(Person).fromContext(test_ctx);
-    defer second.deinit(arena.allocator());
-    try std.testing.expect(!second.owns_data);
-
-    const person = try second.value;
+    const person = try first.value;
+    try std.testing.expectEqual(@intFromPtr(person), @intFromPtr(&first.parsed.?.value));
     try std.testing.expectEqualStrings("Ziggy", person.name);
     try std.testing.expectEqual(@as(u7, 15), person.age);
 }

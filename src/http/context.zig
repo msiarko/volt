@@ -7,13 +7,6 @@
 const std = @import("std");
 const Request = std.http.Server.Request;
 
-/// Per-request memoization cache for owning extractors (Json, TypedQuery).
-///
-/// Since owning extractors parse and allocate, repeated calls for the same type
-/// within one request reuse the already-parsed result rather than parsing again.
-/// Keys are comptime type-name strings; values are opaque pointers to parsed data.
-pub const Cache = std.StringHashMap(*anyopaque);
-
 /// Execution context passed to all HTTP request handlers.
 ///
 /// The Context provides the essential resources needed for request processing:
@@ -21,7 +14,6 @@ pub const Cache = std.StringHashMap(*anyopaque);
 /// - General-purpose allocator for persistent data
 /// - Arena allocator for request-scoped temporary allocations
 /// - Raw request pointer for manual extractor usage
-/// - Optional memoization cache for owning extractors
 ///
 /// This separation allows for efficient memory management where temporary
 /// request data can be freed at the end of each request while persistent
@@ -84,10 +76,4 @@ pub const Context = struct {
     ///
     /// Do not store this pointer in state that outlives the request.
     request: *Request,
-
-    /// Per-request memoization cache for owning extractors (Json, TypedQuery).
-    /// Internal use only. When set, a second extraction of the same type within
-    /// one request returns the already-parsed result at zero extra cost.
-    /// Null when context was created without cache support (e.g., in unit tests).
-    _cache: ?*Cache = null,
 };

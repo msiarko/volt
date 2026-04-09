@@ -168,6 +168,15 @@ Volt automatically extracts parameters from HTTP requests using compile-time ref
 - **extract.RouteParam("name")**: Extracts a named path segment from parametric routes (e.g., `/users/:id`).
 - **extract.WebSocket**: Handles WebSocket upgrade requests and connection handoff.
 
+Ownership and lifetime:
+
+- `extract.Json(T)` and `extract.TypedQuery(T)` are owning extractors.
+- Each extractor call creates an independent allocation.
+- With Volt's default request arena, omitting `deinit(...)` is still memory-safe because request memory is released at request end.
+- Calling `deinit(...)` is still the explicit extractor cleanup contract and is recommended for deterministic cleanup and compatibility with non-arena request allocators.
+- Reusing the same owning extractor type in one handler results in separate allocations (no extractor-level caching).
+- `extract.Query`, `extract.Header`, and `extract.RouteParam` remain non-owning views over request data.
+
 ### JSON Body Parsing
 
 ```zig

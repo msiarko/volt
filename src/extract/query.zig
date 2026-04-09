@@ -149,7 +149,6 @@ test "init returns Query with value when query parameter is present" {
         .server_allocator = std.testing.allocator,
         .request_allocator = std.testing.allocator,
         .request = &http_req,
-        ._cache = null,
     };
     const query = Query("name").fromContext(test_ctx);
 
@@ -172,7 +171,6 @@ test "init returns Query with value when multiple query parameters are present" 
         .server_allocator = std.testing.allocator,
         .request_allocator = std.testing.allocator,
         .request = &http_req,
-        ._cache = null,
     };
     const query = Query("age").fromContext(test_ctx);
 
@@ -195,7 +193,6 @@ test "init returns Query without value when query parameter is not present" {
         .server_allocator = std.testing.allocator,
         .request_allocator = std.testing.allocator,
         .request = &http_req,
-        ._cache = null,
     };
     const query = Query("nonexistent").fromContext(test_ctx);
 
@@ -217,7 +214,6 @@ test "init returns Query without value when query parameter is present but has n
         .server_allocator = std.testing.allocator,
         .request_allocator = std.testing.allocator,
         .request = &http_req,
-        ._cache = null,
     };
     const query = Query("name").fromContext(test_ctx);
 
@@ -239,7 +235,6 @@ test "init returns Query without value when query string is missing" {
         .server_allocator = std.testing.allocator,
         .request_allocator = std.testing.allocator,
         .request = &http_req,
-        ._cache = null,
     };
     const query = Query("name").fromContext(test_ctx);
 
@@ -272,7 +267,6 @@ test "init table-driven query extraction" {
             .server_allocator = std.testing.allocator,
             .request_allocator = std.testing.allocator,
             .request = &http_req,
-            ._cache = null,
         };
         const query = Query("name").fromContext(test_ctx);
         if (case.expected) |expected| {
@@ -301,7 +295,6 @@ test "init decodes encoded query keys and values" {
         .server_allocator = std.testing.allocator,
         .request_allocator = arena.allocator(),
         .request = &http_req,
-        ._cache = null,
     };
     const query = Query("first name").fromContext(test_ctx);
 
@@ -327,7 +320,6 @@ test "init returns null for malformed encoded query value" {
         .server_allocator = std.testing.allocator,
         .request_allocator = arena.allocator(),
         .request = &http_req,
-        ._cache = null,
     };
 
     const query = Query("name").fromContext(test_ctx);
@@ -352,10 +344,10 @@ test "init decodes double-encoded query value only once" {
         .server_allocator = std.testing.allocator,
         .request_allocator = arena.allocator(),
         .request = &http_req,
-        ._cache = null,
     };
 
     const query = Query("name").fromContext(test_ctx);
     try std.testing.expect(query.value != null);
     try std.testing.expectEqualStrings("hello%20world", query.value.?);
 }
+
