@@ -65,10 +65,11 @@ fn initJson(comptime T: type, allocator: std.mem.Allocator, req: *Request) Json(
     }
 
     const parsed = allocator.create(std.json.Parsed(T)) catch |err| return .{ .value = err };
-    errdefer allocator.destroy(parsed);
 
-    parsed.* = std.json.parseFromSlice(T, allocator, data, .{ .allocate = .alloc_always }) catch |err| return .{ .value = err };
-    errdefer parsed.deinit();
+    parsed.* = std.json.parseFromSlice(T, allocator, data, .{ .allocate = .alloc_always }) catch |err| {
+        allocator.destroy(parsed);
+        return .{ .value = err };
+    };
 
     return .{ .value = &parsed.value, .parsed = parsed };
 }

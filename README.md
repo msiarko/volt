@@ -171,11 +171,12 @@ Volt automatically extracts parameters from HTTP requests using compile-time ref
 Ownership and lifetime:
 
 - `extract.Json(T)` and `extract.TypedQuery(T)` are owning extractors.
+- `extract.Query("name")` is conditionally owning: when the query value contains percent-encoded characters or `+`, a decoded copy is allocated with `ctx.request_allocator` and `deinit(allocator)` must be called; when the raw value needs no decoding the slice borrows directly from the request target with no allocation.
 - Each extractor call creates an independent allocation.
 - With Volt's default request arena, omitting `deinit(...)` is still memory-safe because request memory is released at request end.
 - Calling `deinit(...)` is still the explicit extractor cleanup contract and is recommended for deterministic cleanup and compatibility with non-arena request allocators.
 - Reusing the same owning extractor type in one handler results in separate allocations (no extractor-level caching).
-- `extract.Query`, `extract.Header`, and `extract.RouteParam` remain non-owning views over request data.
+- `extract.Header` and `extract.RouteParam` are non-owning views over request data.
 
 ### JSON Body Parsing
 
@@ -221,8 +222,9 @@ fn handleConnection(ctx: volt.Context, state: *AppState, socket: *std.http.Serve
 
 Behavior notes:
 
-- Query components are URL-decoded once (`%XX` and `+` as space).
-- Decoding is single-pass only; double-encoded inputs are not fully decoded.
+- Query values are URL-decoded (`%XX` and `+` as space). Decoding is single-pass only; double-encoded inputs are decoded once.
+- `value` is `anyerror!?[]const u8` with three states: `null` (absent/empty), `error.InvalidPercentEncoding` (malformed encoding), or a decoded `[]const u8`.
+- If decoding allocated a copy, `_owns_value` is `true` and `deinit(allocator)` should be called to release it.
 
 ```zig
 fn findUser(
@@ -231,8 +233,9 @@ fn findUser(
     user_id: volt.extract.Query("id")
 ) !volt.Response {
     _ = state;
+    defer user_id.deinit(ctx.request_allocator);
 
-    if (user_id.value) |id| {
+    if (try user_id.value) |id| {
         return volt.Response.text(ctx.request_allocator, .ok, id, null);
     }
 
