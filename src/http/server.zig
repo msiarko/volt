@@ -212,27 +212,33 @@ pub fn Server(comptime State: type) type {
         fn handleRequest(router: *const Router, ctx: Context, state: *State, req: *HttpRequest) !void {
             const target = normalizedTarget(req.head.target);
             const method = req.head.method;
+            var path_matched = false;
+            var allowed_methods = std.EnumSet(std.http.Method).empty;
 
             // Fast path: exact match via hash map.
             if (router.routes.get(target)) |route_entry| {
+                path_matched = true;
+                collectAllowedMethods(&allowed_methods, route_entry.handlers);
                 if (route_entry.handlers.get(method)) |handler| {
                     try executeWithMiddleware(router, handler, ctx, state, null, req);
-                } else {
-                    return respondMethodNotAllowed(req);
+                    return;
                 }
-                return;
             }
 
             // Slow path: linear scan over parametric routes.
             for (router.parametric_routes.items) |*route| {
                 if (route.match(target)) {
+                    path_matched = true;
+                    collectAllowedMethods(&allowed_methods, route.entry.handlers);
                     if (route.entry.handlers.get(method)) |handler| {
                         try executeWithMiddleware(router, handler, ctx, state, route.pattern, req);
-                    } else {
-                        return respondMethodNotAllowed(req);
+                        return;
                     }
-                    return;
                 }
+            }
+
+            if (path_matched) {
+                return respondMethodNotAllowed(req, ctx.request_allocator, allowed_methods);
             }
 
             return respondNotFound(req);
@@ -250,8 +256,45 @@ pub fn Server(comptime State: type) type {
             return req.respond("Not Found", .{ .status = .not_found });
         }
 
-        fn respondMethodNotAllowed(req: *HttpRequest) !void {
-            return req.respond("Method Not Allowed", .{ .status = .method_not_allowed });
+        fn collectAllowedMethods(methods: *std.EnumSet(std.http.Method), handlers: anytype) void {
+            var it = handlers.iterator();
+            while (it.next()) |entry| {
+                methods.insert(entry.key_ptr.*);
+            }
+        }
+
+        fn buildAllowHeaderValue(allocator: std.mem.Allocator, methods: std.EnumSet(std.http.Method)) ![]u8 {
+            var allow = std.ArrayList(u8).empty;
+            errdefer allow.deinit(allocator);
+
+            var first = true;
+            inline for (std.meta.fields(std.http.Method)) |field| {
+                const method = @field(std.http.Method, field.name);
+                if (methods.contains(method)) {
+                    if (!first) {
+                        try allow.appendSlice(allocator, ", ");
+                    }
+
+                    first = false;
+                    try allow.appendSlice(allocator, @tagName(method));
+                }
+            }
+
+            return allow.toOwnedSlice(allocator);
+        }
+
+        fn respondMethodNotAllowed(req: *HttpRequest, allocator: std.mem.Allocator, methods: std.EnumSet(std.http.Method)) !void {
+            const allow = try buildAllowHeaderValue(allocator, methods);
+            defer allocator.free(allow);
+
+            const extra_headers = [_]std.http.Header{
+                .{ .name = "Allow", .value = allow },
+            };
+
+            return req.respond("Method Not Allowed", .{
+                .status = .method_not_allowed,
+                .extra_headers = &extra_headers,
+            });
         }
 
         fn executeWithMiddleware(
@@ -381,6 +424,141 @@ test "handleRequest returns 405 for method mismatch" {
     const output = write_buffer[0..stream_buf_writer.end];
     try std.testing.expect(std.mem.find(u8, output, "405") != null);
     try std.testing.expect(std.mem.find(u8, output, "Method Not Allowed") != null);
+    try std.testing.expect(std.mem.find(u8, output, "Allow: POST") != null);
+}
+
+test "handleRequest returns 405 with Allow header for parametric route mismatch" {
+    const TestRouter = ServerRouter(void);
+    const TestServer = Server(void);
+
+    var router: TestRouter = .init(std.testing.allocator);
+    defer router.deinit();
+
+    const handlers = struct {
+        fn putOnly(ctx: Context, id: extract.RouteParam("id")) !Response {
+            _ = id;
+            return Response.text(ctx.request_allocator, .ok, "ok", null);
+        }
+    };
+
+    try router.put("/users/:id", &handlers.putOnly);
+
+    const req_bytes = "GET /users/42 HTTP/1.1\r\n\r\n";
+    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+    var req = try http_server.receiveHead();
+
+    var state: void = {};
+    const ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request_allocator = std.testing.allocator,
+        .request = &req,
+    };
+
+    try TestServer.handleRequest(&router, ctx, &state, &req);
+    try stream_buf_writer.flush();
+
+    const output = write_buffer[0..stream_buf_writer.end];
+    try std.testing.expect(std.mem.find(u8, output, "405") != null);
+    try std.testing.expect(std.mem.find(u8, output, "Method Not Allowed") != null);
+    try std.testing.expect(std.mem.find(u8, output, "Allow: PUT") != null);
+}
+
+test "handleRequest falls back to parametric method when exact path lacks method" {
+    const TestRouter = ServerRouter(void);
+    const TestServer = Server(void);
+
+    var router: TestRouter = .init(std.testing.allocator);
+    defer router.deinit();
+
+    const handlers = struct {
+        fn exactPost(ctx: Context) !Response {
+            return Response.text(ctx.request_allocator, .ok, "exact-post", null);
+        }
+
+        fn paramGet(ctx: Context, id: extract.RouteParam("id")) !Response {
+            _ = id;
+            return Response.text(ctx.request_allocator, .ok, "param-get", null);
+        }
+    };
+
+    try router.post("/users/me", &handlers.exactPost);
+    try router.get("/users/:id", &handlers.paramGet);
+
+    const req_bytes = "GET /users/me HTTP/1.1\r\n\r\n";
+    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+    var req = try http_server.receiveHead();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var state: void = {};
+    const ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request_allocator = arena.allocator(),
+        .request = &req,
+    };
+
+    try TestServer.handleRequest(&router, ctx, &state, &req);
+    try stream_buf_writer.flush();
+
+    const output = write_buffer[0..stream_buf_writer.end];
+    try std.testing.expect(std.mem.find(u8, output, "200") != null);
+    try std.testing.expect(std.mem.find(u8, output, "param-get") != null);
+    try std.testing.expect(std.mem.find(u8, output, "405") == null);
+}
+
+test "handleRequest returns combined Allow header for overlapping path matches" {
+    const TestRouter = ServerRouter(void);
+    const TestServer = Server(void);
+
+    var router: TestRouter = .init(std.testing.allocator);
+    defer router.deinit();
+
+    const handlers = struct {
+        fn exactPost(ctx: Context) !Response {
+            return Response.text(ctx.request_allocator, .ok, "exact-post", null);
+        }
+
+        fn paramPut(ctx: Context, id: extract.RouteParam("id")) !Response {
+            _ = id;
+            return Response.text(ctx.request_allocator, .ok, "param-put", null);
+        }
+    };
+
+    try router.post("/users/me", &handlers.exactPost);
+    try router.put("/users/:id", &handlers.paramPut);
+
+    const req_bytes = "GET /users/me HTTP/1.1\r\n\r\n";
+    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+    var req = try http_server.receiveHead();
+
+    var state: void = {};
+    const ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request_allocator = std.testing.allocator,
+        .request = &req,
+    };
+
+    try TestServer.handleRequest(&router, ctx, &state, &req);
+    try stream_buf_writer.flush();
+
+    const output = write_buffer[0..stream_buf_writer.end];
+    try std.testing.expect(std.mem.find(u8, output, "405") != null);
+    try std.testing.expect(std.mem.find(u8, output, "Allow:") != null);
+    try std.testing.expect(std.mem.find(u8, output, "POST") != null);
+    try std.testing.expect(std.mem.find(u8, output, "PUT") != null);
 }
 
 test "handleRequest ignores websocket extractor errors" {

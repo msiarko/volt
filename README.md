@@ -96,7 +96,9 @@ Volt matches routes using the following precedence rules:
 - Parametric routes use `:name` segments, for example `/users/:id`.
 - Among parametric routes, patterns with more literal segments are matched first.
 - Duplicate parameter names in a single route pattern are rejected during registration.
-- If a path matches but the HTTP method does not, Volt returns **405 Method Not Allowed**.
+- If an exact path matches but does not support the requested method, Volt continues scanning matching parametric routes for a method match.
+- Volt returns **405 Method Not Allowed** only when at least one route pattern matches the path and none support the requested method.
+- 405 responses include an `Allow` header listing supported methods across matching route patterns.
 
 Examples:
 
@@ -124,6 +126,7 @@ Middleware contract:
 
 - `init(ctx: *Context) !Self` — Initialize with allocator choice and store references if needed
 - `handle(self: *const Self, next: *const volt.middleware.Next) !volt.Response` — Handle request
+- `deinit(self: *Self, allocator: std.mem.Allocator) void` — Optional cleanup hook called by the framework before middleware storage is destroyed
 
 Use `next.run()` to continue the chain. Returning a `Response` without calling
 `next.run()` short-circuits request processing.
