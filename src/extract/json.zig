@@ -117,10 +117,14 @@ pub fn Json(comptime T: type) type {
         /// The extracted value or an error
         value: anyerror!*T,
 
+        /// Tracks whether this instance owns the extracted data.
+        /// Cache hits are non-owning and should not call destroy().
+        owns_data: bool = true,
+
         /// Cleans up resources allocated during JSON extraction.
         ///
-        /// This method frees all memory allocated for the parsed JSON data,
-        /// including duplicated strings and the main data structure.
+        /// This method is only effective if this instance owns the data (not a cache hit).
+        /// Cache hit instances have no-op deinit to prevent double-free.
         ///
         /// Parameters:
         /// - `allocator`: The same allocator used for extraction
@@ -128,6 +132,8 @@ pub fn Json(comptime T: type) type {
         /// This should be called when the extracted JSON data is no longer needed.
         /// If extraction failed (value is an error), this is a no-op.
         pub fn deinit(self: Self, allocator: std.mem.Allocator) void {
+            if (!self.owns_data) return; // Cache hit: no-op deinit
+
             const value = self.value catch return;
             inline for (@typeInfo(T).@"struct".fields) |field| {
                 if (field.type == []const u8) {
@@ -143,6 +149,11 @@ pub fn Json(comptime T: type) type {
         /// When a request context is available, use this method for manual extraction.
         /// The context provides access to the request and per-request caching;
         /// repeated extractions during the same request reuse the parsed result.
+        ///
+        /// Ownership semantics:
+        /// - First extraction within a request owns the data and is responsible for cleanup.
+        /// - Subsequent extractions in the same request are non-owning cache hits.
+        /// - Only the owning instance should call deinit(); subsequent instances will no-op.
         ///
         /// Parameters:
         /// - `ctx`: Request context (any type with request and request_allocator fields).
@@ -163,10 +174,16 @@ pub fn Json(comptime T: type) type {
             const key = "json:" ++ @typeName(T);
             if (ctx._cache) |cache| {
                 if (cache.get(key)) |cached| {
-                    return .{ .value = @as(*T, @ptrCast(@alignCast(cached))) };
+                    // Cache hit: return non-owning instance
+                    return .{
+                        .value = @as(*T, @ptrCast(@alignCast(cached))),
+                        .owns_data = false,
+                    };
                 }
             }
-            const self = initJson(T, ctx.request_allocator, ctx.request);
+            var self = initJson(T, ctx.request_allocator, ctx.request);
+            // Mark this as owning (first extraction)
+            self.owns_data = true;
             if (ctx._cache) |cache| {
                 if (self.value) |val| {
                     cache.put(key, val) catch {};

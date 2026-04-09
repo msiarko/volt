@@ -116,20 +116,6 @@ pub const Chain = struct {
         return runner.runFrom(0);
     }
 
-    fn normalizeType(comptime T: type) type {
-        return switch (@typeInfo(T)) {
-            .pointer => |ptr| ptr.child,
-            else => T,
-        };
-    }
-
-    fn normalizeValue(comptime M: type, middleware: anytype) M {
-        return switch (@typeInfo(@TypeOf(middleware))) {
-            .pointer => middleware.*,
-            else => middleware,
-        };
-    }
-
     fn isResponseErrorUnion(comptime T: type) bool {
         const info = @typeInfo(T);
         return info == .error_union and info.error_union.payload == Response;
@@ -138,7 +124,7 @@ pub const Chain = struct {
     fn validateMiddlewareType(comptime M: type) void {
         switch (@typeInfo(M)) {
             .@"struct" => {},
-            else => @compileError("middleware must be a struct type or pointer to struct type"),
+            else => @compileError("middleware must be a struct type"),
         }
 
         if (!@hasDecl(M, "handle")) {

@@ -72,7 +72,7 @@ pub fn RouteParam(comptime name: []const u8) type {
 }
 
 fn stripQuery(target: []const u8) []const u8 {
-    if (std.mem.indexOfScalar(u8, target, '?')) |idx| {
+    if (std.mem.findScalar(u8, target, '?')) |idx| {
         return target[0..idx];
     }
     return target;

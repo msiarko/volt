@@ -106,15 +106,25 @@ pub fn TypedQuery(comptime T: type) type {
         /// Parsed query object, null when no non-empty keys were matched.
         value: anyerror!?*T,
 
+        /// Tracks whether this instance owns the extracted data.
+        /// Cache hits are non-owning and should not call destroy().
+        owns_data: bool = true,
+
         /// Releases typed query storage.
+        ///
+        /// This method is only effective if this instance owns the data (not a cache hit).
+        /// Cache hit instances have no-op deinit to prevent double-free.
         ///
         /// Parameters:
         /// - `self`: TypedQuery extractor instance
         /// - `arena`: The allocator used for extraction
         ///
-        /// This method is a no-op when extraction resulted in `null` or an error.
+        /// This method is a no-op when extraction resulted in `null` or an error,
+        /// or when this instance is a cache hit.
         /// Call this once the extracted query object is no longer needed.
         pub fn deinit(self: *Self, arena: std.mem.Allocator) void {
+            if (!self.owns_data) return; // Cache hit: no-op deinit
+
             const val = self.value catch return;
             if (val) |v| {
                 freeTypedQueryFields(T, arena, v);
@@ -127,6 +137,11 @@ pub fn TypedQuery(comptime T: type) type {
         /// When a request context is available, use this method for manual extraction.
         /// The context provides access to the request and per-request caching;
         /// repeated extractions during the same request reuse the parsed result.
+        ///
+        /// Ownership semantics:
+        /// - First extraction within a request owns the data and is responsible for cleanup.
+        /// - Subsequent extractions in the same request are non-owning cache hits.
+        /// - Only the owning instance should call deinit(); subsequent instances will no-op.
         ///
         /// Parameters:
         /// - `ctx`: Request context (any type with request and request_allocator fields).
@@ -148,10 +163,16 @@ pub fn TypedQuery(comptime T: type) type {
             const key = "typed_query:" ++ @typeName(T);
             if (ctx._cache) |cache| {
                 if (cache.get(key)) |cached| {
-                    return .{ .value = @as(*T, @ptrCast(@alignCast(cached))) };
+                    // Cache hit: return non-owning instance
+                    return .{
+                        .value = @as(*T, @ptrCast(@alignCast(cached))),
+                        .owns_data = false,
+                    };
                 }
             }
-            const self = initTypedQuery(T, ctx.request_allocator, ctx.request);
+            var self = initTypedQuery(T, ctx.request_allocator, ctx.request);
+            // Mark this as owning (first extraction)
+            self.owns_data = true;
             if (ctx._cache) |cache| {
                 if (self.value) |val| {
                     if (val) |v| {

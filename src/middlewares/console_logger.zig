@@ -48,7 +48,7 @@ pub const ConsoleLogger = struct {
         const version = req.head.version;
 
         // Normalize target to remove query string
-        const path = if (std.mem.indexOfScalar(u8, target, '?')) |idx|
+        const path = if (std.mem.findScalar(u8, target, '?')) |idx|
             target[0..idx]
         else
             target;
