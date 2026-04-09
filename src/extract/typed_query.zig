@@ -12,7 +12,6 @@ fn freeTypedQueryFields(comptime T: type, arena: std.mem.Allocator, typed_query:
     inline for (@typeInfo(T).@"struct".fields) |field| {
         if (@field(typed_query.*, field.name)) |field_value| {
             arena.free(field_value);
-            @field(typed_query.*, field.name) = null;
         }
     }
 }
@@ -139,9 +138,9 @@ pub fn TypedQuery(comptime T: type) type {
         /// repeated extractions during the same request reuse the parsed result.
         ///
         /// Ownership semantics:
-        /// - First extraction within a request owns the data and is responsible for cleanup.
-        /// - Subsequent extractions in the same request are non-owning cache hits.
-        /// - Only the owning instance should call deinit(); subsequent instances will no-op.
+        /// - With request cache enabled, all extracted instances are non-owning.
+        ///   Data is request-scoped and remains stable for the request lifetime.
+        /// - Without request cache, the instance owns extracted data and should call deinit().
         ///
         /// Parameters:
         /// - `ctx`: Request context (any type with request and request_allocator fields).
@@ -170,16 +169,22 @@ pub fn TypedQuery(comptime T: type) type {
                     };
                 }
             }
+
             var self = initTypedQuery(T, ctx.request_allocator, ctx.request);
-            // Mark this as owning (first extraction)
-            self.owns_data = true;
+
+            // When request cache is enabled, extracted values are request-scoped and
+            // should not be individually freed by extractor instances.
             if (ctx._cache) |cache| {
+                self.owns_data = false;
                 if (self.value) |val| {
                     if (val) |v| {
                         cache.put(key, v) catch {};
                     }
                 } else |_| {}
+            } else {
+                self.owns_data = true;
             }
+
             return self;
         }
     };
@@ -593,4 +598,48 @@ test "init does not match encoded typed query keys" {
     defer typed_query.deinit(arena.allocator());
 
     try std.testing.expectEqual(null, try typed_query.value);
+}
+
+test "fromContext keeps cached typed query stable after deinit" {
+    const Filters = struct {
+        name: ?[]const u8,
+        age: ?[]const u8,
+    };
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var cache = @import("../http/context.zig").Cache.init(std.testing.allocator);
+    defer cache.deinit();
+
+    const req_bytes = std.fmt.comptimePrint("GET /users?name=Ziggy&age=30 HTTP/1.1\r\n\r\n", .{});
+    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+
+    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+    var http_req = try http_server.receiveHead();
+
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request = &http_req,
+        .request_allocator = arena.allocator(),
+        ._cache = &cache,
+    };
+
+    var first = TypedQuery(Filters).fromContext(test_ctx);
+    try std.testing.expect(!first.owns_data);
+
+    // Should be a no-op for cached instances.
+    first.deinit(arena.allocator());
+
+    var second = TypedQuery(Filters).fromContext(test_ctx);
+    defer second.deinit(arena.allocator());
+    try std.testing.expect(!second.owns_data);
+
+    const filters = (try second.value) orelse unreachable;
+    try std.testing.expectEqualStrings("Ziggy", filters.name.?);
+    try std.testing.expectEqualStrings("30", filters.age.?);
 }

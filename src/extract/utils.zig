@@ -86,9 +86,36 @@ pub fn queryComponentEqualsAsciiIgnoreCaseDecoded(component: []const u8, expecte
 pub fn decodeQueryComponent(allocator: std.mem.Allocator, component: []const u8) ![]const u8 {
     if (!queryComponentNeedsDecoding(component)) return component;
 
-    const out = try allocator.alloc(u8, component.len);
-    var out_i: usize = 0;
+    // First pass validates percent-escapes and computes decoded output length.
+    var decoded_len: usize = 0;
     var i: usize = 0;
+    while (i < component.len) {
+        const c = component[i];
+        if (c == '+') {
+            decoded_len += 1;
+            i += 1;
+            continue;
+        }
+
+        if (c == '%') {
+            if (i + 2 >= component.len) return error.InvalidPercentEncoding;
+
+            const hi = decodeHexNibble(component[i + 1]) orelse return error.InvalidPercentEncoding;
+            const lo = decodeHexNibble(component[i + 2]) orelse return error.InvalidPercentEncoding;
+            _ = hi;
+            _ = lo;
+            decoded_len += 1;
+            i += 3;
+            continue;
+        }
+
+        decoded_len += 1;
+        i += 1;
+    }
+
+    const out = try allocator.alloc(u8, decoded_len);
+    var out_i: usize = 0;
+    i = 0;
     while (i < component.len) {
         const c = component[i];
         if (c == '+') {
@@ -99,10 +126,8 @@ pub fn decodeQueryComponent(allocator: std.mem.Allocator, component: []const u8)
         }
 
         if (c == '%') {
-            if (i + 2 >= component.len) return error.InvalidPercentEncoding;
-
-            const hi = decodeHexNibble(component[i + 1]) orelse return error.InvalidPercentEncoding;
-            const lo = decodeHexNibble(component[i + 2]) orelse return error.InvalidPercentEncoding;
+            const hi = decodeHexNibble(component[i + 1]).?;
+            const lo = decodeHexNibble(component[i + 2]).?;
             out[out_i] = (hi << 4) | lo;
             out_i += 1;
             i += 3;
@@ -114,7 +139,7 @@ pub fn decodeQueryComponent(allocator: std.mem.Allocator, component: []const u8)
         i += 1;
     }
 
-    return out[0..out_i];
+    return out;
 }
 
 const testing = std.testing;
@@ -150,6 +175,13 @@ test "decodeQueryComponent fails on malformed percent escape" {
     defer arena.deinit();
 
     try testing.expectError(error.InvalidPercentEncoding, decodeQueryComponent(arena.allocator(), "bad%2"));
+}
+
+test "decodeQueryComponent returns allocation-sized slice" {
+    const decoded = try decodeQueryComponent(testing.allocator, "a%20b");
+    defer testing.allocator.free(decoded);
+
+    try testing.expectEqualStrings("a b", decoded);
 }
 
 test "queryComponentEqualsAsciiIgnoreCaseDecoded matches encoded key" {

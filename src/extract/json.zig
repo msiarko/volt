@@ -151,9 +151,9 @@ pub fn Json(comptime T: type) type {
         /// repeated extractions during the same request reuse the parsed result.
         ///
         /// Ownership semantics:
-        /// - First extraction within a request owns the data and is responsible for cleanup.
-        /// - Subsequent extractions in the same request are non-owning cache hits.
-        /// - Only the owning instance should call deinit(); subsequent instances will no-op.
+        /// - With request cache enabled, all extracted instances are non-owning.
+        ///   Data is request-scoped and remains stable for the request lifetime.
+        /// - Without request cache, the instance owns extracted data and should call deinit().
         ///
         /// Parameters:
         /// - `ctx`: Request context (any type with request and request_allocator fields).
@@ -181,14 +181,20 @@ pub fn Json(comptime T: type) type {
                     };
                 }
             }
+
             var self = initJson(T, ctx.request_allocator, ctx.request);
-            // Mark this as owning (first extraction)
-            self.owns_data = true;
+
+            // When request cache is enabled, extracted values are request-scoped and
+            // should not be individually freed by extractor instances.
             if (ctx._cache) |cache| {
+                self.owns_data = false;
                 if (self.value) |val| {
                     cache.put(key, val) catch {};
                 } else |_| {}
+            } else {
+                self.owns_data = true;
             }
+
             return self;
         }
     };
@@ -440,4 +446,54 @@ test "matches returns false for non-Json extractor" {
     };
 
     try std.testing.expect(!comptime Resolver.matches(Person));
+}
+
+test "fromContext keeps cached json stable after deinit" {
+    const Person = struct {
+        name: []const u8,
+        age: u7,
+    };
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var cache = @import("../http/context.zig").Cache.init(std.testing.allocator);
+    defer cache.deinit();
+
+    const body = "{\"name\":\"Ziggy\",\"age\":15}";
+    const req_bytes = std.fmt.comptimePrint("POST /person HTTP/1.1\r\n" ++
+        "Content-Type: application/json\r\n" ++
+        "Content-Length: {d}\r\n" ++
+        "\r\n" ++
+        "{s}", .{ body.len, body });
+
+    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+
+    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+    var http_req = try http_server.receiveHead();
+
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request = &http_req,
+        .request_allocator = arena.allocator(),
+        ._cache = &cache,
+    };
+
+    const first = Json(Person).fromContext(test_ctx);
+    try std.testing.expect(!first.owns_data);
+
+    // Should be a no-op for cached instances.
+    first.deinit(arena.allocator());
+
+    const second = Json(Person).fromContext(test_ctx);
+    defer second.deinit(arena.allocator());
+    try std.testing.expect(!second.owns_data);
+
+    const person = try second.value;
+    try std.testing.expectEqualStrings("Ziggy", person.name);
+    try std.testing.expectEqual(@as(u7, 15), person.age);
 }
