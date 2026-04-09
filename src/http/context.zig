@@ -19,9 +19,10 @@ const Request = std.http.Server.Request;
 /// request data can be freed at the end of each request while persistent
 /// data remains allocated.
 ///
-/// **I/O:** All I/O operations within handlers and middleware must use `ctx.io`
-/// rather than obtaining a separate I/O handle. This ensures correct participation
-/// in the async event loop and proper cancellation support.
+/// **I/O:** Request/connection I/O within handlers and middleware must use
+/// `ctx.io` rather than obtaining a separate I/O handle. This ensures correct
+/// participation in the async event loop and proper cancellation support.
+/// Diagnostic logging may use `std.log`.
 ///
 /// Example usage in a handler:
 /// ```zig
@@ -76,4 +77,22 @@ pub const Context = struct {
     ///
     /// Do not store this pointer in state that outlives the request.
     request: *Request,
+
+    /// Convenience initializer for constructing request context values.
+    ///
+    /// This keeps context construction explicit and stable for tests or
+    /// custom integrations while matching the current struct shape.
+    pub fn init(
+        io: std.Io,
+        server_allocator: std.mem.Allocator,
+        request_allocator: std.mem.Allocator,
+        request: *Request,
+    ) Context {
+        return .{
+            .io = io,
+            .server_allocator = server_allocator,
+            .request_allocator = request_allocator,
+            .request = request,
+        };
+    }
 };

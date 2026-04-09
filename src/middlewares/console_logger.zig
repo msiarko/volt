@@ -39,8 +39,7 @@ pub const ConsoleLogger = struct {
 
     /// Initializes a new ConsoleLogger instance for the current request.
     /// Stores references to request data (valid for the lifetime of the request/middleware).
-    /// Captures `ctx.io` for use in `handle()` — any I/O operations within
-    /// middleware must use `ctx.io` to participate correctly in the async event loop.
+    /// Captures `ctx.io` for monotonic timestamp reads used for duration metrics.
     pub fn init(ctx: *Context) !Self {
         const req = ctx.request;
         const method = req.head.method;
@@ -91,7 +90,7 @@ pub const ConsoleLogger = struct {
     fn logRequest(method: []const u8, path: []const u8, version: []const u8) void {
         const cyan = "\x1b[36m";
         const reset = "\x1b[0m";
-        std.debug.print("{s}{s} {s} {s}{s}\n", .{ cyan, method, path, version, reset });
+        std.log.info("{s}{s} {s} {s}{s}", .{ cyan, method, path, version, reset });
     }
 
     fn logResponse(method: []const u8, path: []const u8, version: []const u8, response: Response, duration_ms: i64) void {
@@ -100,7 +99,7 @@ pub const ConsoleLogger = struct {
             .web_socket => .{ 101, "\x1b[36m" }, // Switching Protocols (1xx)
         };
         const reset = "\x1b[0m";
-        std.debug.print("{s}{s} {s} {s} -> {d} ({d}ms){s}\n", .{ color, method, path, version, status_code, duration_ms, reset });
+        std.log.info("{s}{s} {s} {s} -> {d} ({d}ms){s}", .{ color, method, path, version, status_code, duration_ms, reset });
     }
 
     fn colorForStatusClass(class: std.http.Status.Class) []const u8 {
@@ -116,7 +115,7 @@ pub const ConsoleLogger = struct {
         const error_name = @errorName(err);
         const red = "\x1b[31m";
         const reset = "\x1b[0m";
-        std.debug.print("{s}{s} {s} {s} -> ERROR: {s} ({d}ms){s}\n", .{ red, method, path, version, error_name, duration_ms, reset });
+        std.log.err("{s}{s} {s} {s} -> ERROR: {s} ({d}ms){s}", .{ red, method, path, version, error_name, duration_ms, reset });
     }
 
     fn formatHttpVersion(version: std.http.Version) []const u8 {

@@ -16,6 +16,7 @@ pub const Entry = struct {
         ptr: *anyopaque,
         next: *const Next,
     ) anyerror!Response,
+    destroy: *const fn (ptr: *anyopaque, allocator: std.mem.Allocator) void,
 };
 
 pub const Next = struct {
@@ -47,6 +48,9 @@ pub const Chain = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        for (self.entries.items) |entry| {
+            entry.destroy(entry.ptr, self.allocator);
+        }
         self.entries.deinit(self.allocator);
     }
 
@@ -54,8 +58,8 @@ pub const Chain = struct {
     /// Each factory is called once to create a fresh middleware instance for this request.
     /// Middleware instance storage is request-scoped.
     /// Context still allows middleware internals to choose allocator strategy.
-    /// Any I/O operations inside middleware must use `ctx.io` to participate
-    /// correctly in the async event loop.
+    /// Request/connection I/O inside middleware must use `ctx.io` to
+    /// participate correctly in the async event loop.
     pub fn initFromFactories(ctx: *Context, factories: []const MiddlewareFactory) !Self {
         const allocator = ctx.request_allocator;
         var self = Chain.init(allocator);
@@ -173,6 +177,7 @@ pub const Chain = struct {
     pub fn makeFactory(comptime M: type) MiddlewareFactory {
         comptime validateMiddlewareType(M);
         comptime validateInitSignature(M);
+        comptime validateOptionalDeinitSignature(M);
 
         return struct {
             fn factory(ctx: *Context) anyerror!Entry {
@@ -217,17 +222,108 @@ pub const Chain = struct {
         }
     }
 
+    fn validateOptionalDeinitSignature(comptime M: type) void {
+        if (!@hasDecl(M, "deinit")) return;
+
+        const Deinit = @TypeOf(@field(M, "deinit"));
+        const info = @typeInfo(Deinit);
+        if (info != .@"fn") {
+            @compileError("middleware deinit must be a function declaration");
+        }
+
+        const params = info.@"fn".params;
+        if (params.len != 2) {
+            @compileError("middleware deinit signature must be deinit(self: *Self, allocator: std.mem.Allocator) void");
+        }
+
+        const p0 = params[0].type orelse @compileError("middleware deinit contains an untyped parameter");
+        const p1 = params[1].type orelse @compileError("middleware deinit contains an untyped parameter");
+
+        if (p0 != *M) {
+            @compileError("middleware deinit first parameter must be self: *Self");
+        }
+
+        if (p1 != Allocator) {
+            @compileError("middleware deinit second parameter must be allocator: std.mem.Allocator");
+        }
+
+        const ret = info.@"fn".return_type orelse @compileError("middleware deinit must return void");
+        if (ret != void) {
+            @compileError("middleware deinit must return void");
+        }
+    }
+
     fn makeEntry(comptime M: type, ptr: *M) Entry {
+        comptime validateOptionalDeinitSignature(M);
+
         const Impl = struct {
             fn execute(raw_ptr: *anyopaque, next: *const Next) anyerror!Response {
                 const self: *const M = @ptrCast(@alignCast(raw_ptr));
                 return @call(.auto, @field(M, "handle"), .{ self, next });
+            }
+
+            fn destroy(raw_ptr: *anyopaque, allocator: Allocator) void {
+                const self: *M = @ptrCast(@alignCast(raw_ptr));
+                if (comptime @hasDecl(M, "deinit")) {
+                    @call(.auto, @field(M, "deinit"), .{ self, allocator });
+                }
+                allocator.destroy(self);
             }
         };
 
         return .{
             .ptr = ptr,
             .execute = Impl.execute,
+            .destroy = Impl.destroy,
         };
     }
 };
+
+test "Chain.deinit invokes middleware deinit callback" {
+    const TrackingMiddleware = struct {
+        const Self = @This();
+
+        var deinit_count: usize = 0;
+
+        pub fn handle(self: *const Self, next: *const Next) !Response {
+            _ = self;
+            return next.run();
+        }
+
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            _ = allocator;
+            _ = self;
+            deinit_count += 1;
+        }
+    };
+
+    const mw = try std.testing.allocator.create(TrackingMiddleware);
+    mw.* = .{};
+
+    var chain = Chain.init(std.testing.allocator);
+    try chain.entries.append(std.testing.allocator, Chain.makeEntry(TrackingMiddleware, mw));
+
+    TrackingMiddleware.deinit_count = 0;
+    chain.deinit();
+    try std.testing.expectEqual(@as(usize, 1), TrackingMiddleware.deinit_count);
+}
+
+test "Chain.deinit destroys middleware without deinit method" {
+    const PlainMiddleware = struct {
+        const Self = @This();
+
+        pub fn handle(self: *const Self, next: *const Next) !Response {
+            _ = self;
+            return next.run();
+        }
+    };
+
+    const mw = try std.testing.allocator.create(PlainMiddleware);
+    mw.* = .{};
+
+    var chain = Chain.init(std.testing.allocator);
+    try chain.entries.append(std.testing.allocator, Chain.makeEntry(PlainMiddleware, mw));
+
+    // This would leak under std.testing.allocator if Chain.deinit didn't destroy entries.
+    chain.deinit();
+}
