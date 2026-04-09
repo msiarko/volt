@@ -47,10 +47,6 @@ const Request = std.http.Server.Request;
 /// }
 /// ```
 pub const Context = struct {
-    /// Compile-time marker used by the extractor system to identify request
-    /// context types without a cross-module import. Do not use directly.
-    pub const VOLT_REQUEST_CONTEXT = true;
-
     /// I/O interface for network operations and async I/O.
     io: std.Io,
 
@@ -78,6 +74,13 @@ pub const Context = struct {
     /// Do not store this pointer in state that outlives the request.
     request: *Request,
 
+    /// Request path with the query string stripped (e.g. `/users/42` for
+    /// `/users/42?verbose=true`). Computed once per request by the server
+    /// and shared with middleware and handlers to avoid redundant scanning.
+    /// Defaults to `""` so that test contexts that do not exercise routing
+    /// can be constructed without setting this field.
+    path: []const u8 = "",
+
     /// Convenience initializer for constructing request context values.
     ///
     /// This keeps context construction explicit and stable for tests or
@@ -87,12 +90,14 @@ pub const Context = struct {
         server_allocator: std.mem.Allocator,
         request_allocator: std.mem.Allocator,
         request: *Request,
+        path: []const u8,
     ) Context {
         return .{
             .io = io,
             .server_allocator = server_allocator,
             .request_allocator = request_allocator,
             .request = request,
+            .path = path,
         };
     }
 };

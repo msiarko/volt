@@ -43,11 +43,10 @@ pub const Response = union(enum) {
         content_headers: []const HttpHeader,
         extra_headers: ?[]const HttpHeader,
     ) !Self {
-        const headers = try std.mem.concat(
-            arena,
-            HttpHeader,
-            &.{ content_headers, extra_headers orelse &.{} },
-        );
+        const headers: []const HttpHeader = if (extra_headers) |eh|
+            try std.mem.concat(arena, HttpHeader, &.{ content_headers, eh })
+        else
+            content_headers;
         return .{
             .http = .{ .status = status, .content = content, .headers = headers },
         };

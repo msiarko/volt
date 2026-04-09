@@ -175,13 +175,17 @@ Volt automatically extracts parameters from HTTP requests using compile-time ref
 
 Ownership and lifetime:
 
-- `extract.Json(T)` and `extract.TypedQuery(T)` are owning extractors.
-- `extract.Query("name")` is conditionally owning: when the query value contains percent-encoded characters or `+`, a decoded copy is allocated with `ctx.request_allocator` and `deinit(allocator)` must be called; when the raw value needs no decoding the slice borrows directly from the request target with no allocation.
-- Each extractor call creates an independent allocation.
-- With Volt's default request arena, omitting `deinit(...)` is still memory-safe because request memory is released at request end.
-- Calling `deinit(...)` is still the explicit extractor cleanup contract and is recommended for deterministic cleanup and compatibility with non-arena request allocators.
-- Reusing the same owning extractor type in one handler results in separate allocations (no extractor-level caching).
-- `extract.Header` and `extract.RouteParam` are non-owning views over request data.
+- `extract.Json(T)` is an owning extractor: parsed data is allocated and should be released with `deinit(allocator)` when not using a request-scoped arena.
+- `extract.Query("name")` is conditionally owning:
+  - If the raw query value contains percent-encoding (e.g. `%XX`) or `+` characters, the extractor allocates a decoded copy from `ctx.request_allocator`.
+  - If the raw value needs no decoding, the returned slice borrows directly from the request target (zero-copy, no allocation).
+  - Decoding is performed in a single pass. When an allocation occurs, call `deinit(allocator)` to free it; when using Volt's default request arena this is optional but recommended for compatibility with non-arena allocators.
+- `extract.TypedQuery(T)` maps multiple query keys into a typed struct and may contain a mix of owned and borrowed fields:
+  - Each field that required decoding is allocated from `ctx.request_allocator`.
+  - Plain-ASCII fields borrow slices directly from the request target with no allocation.
+  - The extractor tracks ownership per-field and `deinit(allocator)` frees only the owned fields. Always call `deinit(allocator)` for deterministic cleanup when using non-arena allocators; omitting it is still memory-safe with the default request arena.
+- Each extractor call creates independent allocations (no implicit caching). Reusing the same owning extractor type in a handler results in separate allocations per call.
+- `extract.Header` and `extract.RouteParam` are non-owning views over request data and never allocate.
 
 ### JSON Body Parsing
 

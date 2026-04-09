@@ -58,14 +58,9 @@ fn initJson(comptime T: type, allocator: std.mem.Allocator, req: *Request) Json(
         req.head.transfer_encoding,
         req.head.content_length,
     );
+
     reader.readSliceAll(data) catch |err| return .{ .value = err };
-    const isValidJson = std.json.validate(allocator, data) catch |err| return .{ .value = err };
-    if (!isValidJson) {
-        return .{ .value = error.InvalidJson };
-    }
-
     const parsed = allocator.create(std.json.Parsed(T)) catch |err| return .{ .value = err };
-
     parsed.* = std.json.parseFromSlice(T, allocator, data, .{ .allocate = .alloc_always }) catch |err| {
         allocator.destroy(parsed);
         return .{ .value = err };
@@ -182,11 +177,6 @@ pub const Resolver = struct {
     pub fn resolve(comptime T: type, allocator: std.mem.Allocator, req: *Request) T {
         const resolved_type = Extracted(T);
         return initJson(resolved_type, allocator, req);
-    }
-
-    pub fn resolveWithContext(comptime T: type, ctx: Context) T {
-        const resolved_type = Extracted(T);
-        return Json(resolved_type).fromContext(ctx);
     }
 };
 

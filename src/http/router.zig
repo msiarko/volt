@@ -311,19 +311,22 @@ pub fn Router(comptime State: type) type {
             var list: std.ArrayListUnmanaged(Segment) = .empty;
             errdefer list.deinit(allocator);
             var literal_count: usize = 0;
+            // Track only param names for duplicate detection — O(p) per param
+            // instead of O(n) over all segments. Capped at 8; routes with more
+            // params return TooManyRouteParams.
+            var seen_params: [8][]const u8 = undefined;
+            var seen_params_len: usize = 0;
             while (it.next()) |seg| {
                 if (seg.len > 0 and seg[0] == ':') {
                     const name = seg[1..];
-                    for (list.items) |existing| {
-                        switch (existing) {
-                            .param => |existing_name| {
-                                if (std.mem.eql(u8, existing_name, name)) {
-                                    return error.DuplicateRouteParamName;
-                                }
-                            },
-                            .literal => {},
+                    for (seen_params[0..seen_params_len]) |existing_name| {
+                        if (std.mem.eql(u8, existing_name, name)) {
+                            return error.DuplicateRouteParamName;
                         }
                     }
+                    if (seen_params_len >= seen_params.len) return error.TooManyRouteParams;
+                    seen_params[seen_params_len] = name;
+                    seen_params_len += 1;
                     try list.append(allocator, .{ .param = name });
                 } else {
                     try list.append(allocator, .{ .literal = seg });

@@ -83,39 +83,18 @@ pub fn queryComponentEqualsAsciiIgnoreCaseDecoded(component: []const u8, expecte
     return j == expected.len;
 }
 
-pub fn decodeQueryComponent(allocator: std.mem.Allocator, component: []const u8) ![]const u8 {
-    if (!queryComponentNeedsDecoding(component)) return component;
+/// Decodes a query component that is already known to need decoding.
+///
+/// Identical to `decodeQueryComponent` but skips the `queryComponentNeedsDecoding`
+/// guard. Use this when the caller has already confirmed that `component` contains
+/// `%`- or `+`-encoded sequences, to avoid scanning the bytes a second time.
+pub fn decodeQueryComponentAssumeNeeded(allocator: std.mem.Allocator, component: []const u8) ![]const u8 {
+    // component.len is a tight upper bound: decoding never expands bytes.
+    const out = try allocator.alloc(u8, component.len);
+    errdefer allocator.free(out);
 
-    // First pass validates percent-escapes and computes decoded output length.
-    var decoded_len: usize = 0;
     var i: usize = 0;
-    while (i < component.len) {
-        const c = component[i];
-        if (c == '+') {
-            decoded_len += 1;
-            i += 1;
-            continue;
-        }
-
-        if (c == '%') {
-            if (i + 2 >= component.len) return error.InvalidPercentEncoding;
-
-            const hi = decodeHexNibble(component[i + 1]) orelse return error.InvalidPercentEncoding;
-            const lo = decodeHexNibble(component[i + 2]) orelse return error.InvalidPercentEncoding;
-            _ = hi;
-            _ = lo;
-            decoded_len += 1;
-            i += 3;
-            continue;
-        }
-
-        decoded_len += 1;
-        i += 1;
-    }
-
-    const out = try allocator.alloc(u8, decoded_len);
     var out_i: usize = 0;
-    i = 0;
     while (i < component.len) {
         const c = component[i];
         if (c == '+') {
@@ -126,8 +105,9 @@ pub fn decodeQueryComponent(allocator: std.mem.Allocator, component: []const u8)
         }
 
         if (c == '%') {
-            const hi = decodeHexNibble(component[i + 1]).?;
-            const lo = decodeHexNibble(component[i + 2]).?;
+            if (i + 2 >= component.len) return error.InvalidPercentEncoding;
+            const hi = decodeHexNibble(component[i + 1]) orelse return error.InvalidPercentEncoding;
+            const lo = decodeHexNibble(component[i + 2]) orelse return error.InvalidPercentEncoding;
             out[out_i] = (hi << 4) | lo;
             out_i += 1;
             i += 3;
@@ -139,7 +119,13 @@ pub fn decodeQueryComponent(allocator: std.mem.Allocator, component: []const u8)
         i += 1;
     }
 
-    return out;
+    // Shrink the allocation to the actual decoded length.
+    return allocator.realloc(out, out_i);
+}
+
+pub fn decodeQueryComponent(allocator: std.mem.Allocator, component: []const u8) ![]const u8 {
+    if (!queryComponentNeedsDecoding(component)) return component;
+    return decodeQueryComponentAssumeNeeded(allocator, component);
 }
 
 const testing = std.testing;

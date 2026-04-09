@@ -15,7 +15,7 @@ pub fn isMemberOfErrorSet(comptime T: type, err: anyerror) bool {
     const info = @typeInfo(T);
     if (info != .error_set) @compileError("T should be an error set");
 
-    const error_set = info.error_set orelse false;
+    const error_set = info.error_set orelse return false;
     inline for (error_set) |err_field| {
         if (err == @field(T, err_field.name)) return true;
     }

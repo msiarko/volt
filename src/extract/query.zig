@@ -8,7 +8,7 @@
 const std = @import("std");
 const utils = @import("utils.zig");
 const Request = std.http.Server.Request;
-const StructField = std.builtin.Type.StructField;
+
 const Context = @import("../http/context.zig").Context;
 
 /// Extracts the configured query parameter from the request target.
@@ -53,6 +53,8 @@ pub fn Query(comptime name: []const u8) type {
 
         /// Compile-time marker used to identify Query extractor types.
         pub const VOLT_QUERY_EXTRACTOR = true;
+        /// Compile-time query parameter name this extractor resolves.
+        pub const param_name: []const u8 = name;
 
         /// Extracted query value for `name`.
         ///
@@ -61,8 +63,6 @@ pub fn Query(comptime name: []const u8) type {
         /// - `error.InvalidPercentEncoding` — value contained malformed percent-encoding
         /// - `[]const u8` — successfully decoded value
         value: anyerror!?[]const u8,
-        /// Query parameter name this extractor resolves.
-        name: []const u8 = name,
         /// Whether `value` was heap-allocated during URL decoding.
         ///
         /// True only when the raw query value contained percent-encoded sequences
@@ -117,13 +117,7 @@ fn getParamName(comptime T: type) []const u8 {
         @compileError("expected Query extractor type");
     }
 
-    inline for (@typeInfo(T).@"struct".fields) |field| {
-        if (std.mem.eql(u8, field.name, "name")) {
-            if (StructField.defaultValue(field)) |name| {
-                return name;
-            }
-        }
-    }
+    return T.param_name;
 }
 
 /// Resolver for Query extractors in the compile-time registry.
@@ -140,11 +134,6 @@ pub const Resolver = struct {
     pub fn resolve(comptime T: type, allocator: std.mem.Allocator, req: *Request) T {
         const param_name = comptime getParamName(T);
         return initQuery(param_name, allocator, req);
-    }
-
-    pub fn resolveWithContext(comptime T: type, ctx: Context) T {
-        const param_name = comptime getParamName(T);
-        return Query(param_name).fromContext(ctx);
     }
 };
 

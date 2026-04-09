@@ -41,10 +41,6 @@ pub const Resolver = struct {
         _ = allocator;
         return initWebSocket(req);
     }
-
-    pub fn resolveWithContext(comptime T: type, ctx: Context) T {
-        return WebSocket.fromContext(ctx);
-    }
 };
 
 /// Attempts to upgrade the connection to WebSocket.
@@ -205,4 +201,3 @@ test "init returns NotWebSocketUpgrade for regular HTTP request" {
     const ws = WebSocket.fromContext(test_ctx);
     try std.testing.expectError(WebSocketError.NotWebSocketUpgrade, ws.socket);
 }
-

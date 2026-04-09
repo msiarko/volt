@@ -186,6 +186,7 @@ pub fn Server(comptime State: type) type {
                     .server_allocator = self.allocator,
                     .request_allocator = req_allocator,
                     .request = &req,
+                    .path = normalizedTarget(req.head.target),
                 };
 
                 // Library-level fallback for unhandled handler/middleware errors:
@@ -222,7 +223,7 @@ pub fn Server(comptime State: type) type {
         }
 
         fn handleRequest(router: *const Router, ctx: Context, state: *State, req: *HttpRequest) !void {
-            const target = normalizedTarget(req.head.target);
+            const target = ctx.path;
             const method = req.head.method;
             var path_matched = false;
             var allowed_methods = std.EnumSet(std.http.Method).empty;
@@ -230,27 +231,27 @@ pub fn Server(comptime State: type) type {
             // Fast path: exact match via hash map.
             if (router.routes.get(target)) |route_entry| {
                 path_matched = true;
-                collectAllowedMethods(&allowed_methods, route_entry.handlers);
                 if (route_entry.handlers.get(method)) |handler| {
                     try executeWithMiddleware(router, handler, ctx, state, null, req);
                     return;
                 }
+                collectAllowedMethods(&allowed_methods, route_entry.handlers);
             }
 
             // Slow path: linear scan over parametric routes.
             for (router.parametric_routes.items) |*route| {
                 if (route.match(target)) {
                     path_matched = true;
-                    collectAllowedMethods(&allowed_methods, route.entry.handlers);
                     if (route.entry.handlers.get(method)) |handler| {
                         try executeWithMiddleware(router, handler, ctx, state, route.pattern, req);
                         return;
                     }
+                    collectAllowedMethods(&allowed_methods, route.entry.handlers);
                 }
             }
 
             if (path_matched) {
-                return respondMethodNotAllowed(req, ctx.request_allocator, allowed_methods);
+                return respondMethodNotAllowed(req, allowed_methods);
             }
 
             return respondNotFound(req);
@@ -275,29 +276,27 @@ pub fn Server(comptime State: type) type {
             }
         }
 
-        fn buildAllowHeaderValue(allocator: std.mem.Allocator, methods: std.EnumSet(std.http.Method)) ![]u8 {
-            var allow = std.ArrayList(u8).empty;
-            errdefer allow.deinit(allocator);
-
+        fn buildAllowHeaderValue(buf: *[128]u8, methods: std.EnumSet(std.http.Method)) []u8 {
+            var writer = std.Io.Writer.fixed(buf);
             var first = true;
             inline for (std.meta.fields(std.http.Method)) |field| {
                 const method = @field(std.http.Method, field.name);
                 if (methods.contains(method)) {
                     if (!first) {
-                        try allow.appendSlice(allocator, ", ");
+                        writer.writeAll(", ") catch unreachable;
                     }
 
                     first = false;
-                    try allow.appendSlice(allocator, @tagName(method));
+                    writer.writeAll(@tagName(method)) catch unreachable;
                 }
             }
 
-            return allow.toOwnedSlice(allocator);
+            return writer.buffer[0..writer.end];
         }
 
-        fn respondMethodNotAllowed(req: *HttpRequest, allocator: std.mem.Allocator, methods: std.EnumSet(std.http.Method)) !void {
-            const allow = try buildAllowHeaderValue(allocator, methods);
-            defer allocator.free(allow);
+        fn respondMethodNotAllowed(req: *HttpRequest, methods: std.EnumSet(std.http.Method)) !void {
+            var buf: [128]u8 = undefined;
+            const allow = buildAllowHeaderValue(&buf, methods);
 
             const extra_headers = [_]std.http.Header{
                 .{ .name = "Allow", .value = allow },
@@ -390,6 +389,7 @@ test "handleRequest returns 404 for unknown route" {
         .server_allocator = std.testing.allocator,
         .request_allocator = std.testing.allocator,
         .request = &req,
+        .path = req.head.target,
     };
 
     try TestServer.handleRequest(&router, ctx, &state, &req);
@@ -428,6 +428,7 @@ test "handleRequest returns 405 for method mismatch" {
         .server_allocator = std.testing.allocator,
         .request_allocator = std.testing.allocator,
         .request = &req,
+        .path = req.head.target,
     };
 
     try TestServer.handleRequest(&router, ctx, &state, &req);
@@ -468,6 +469,7 @@ test "handleRequest returns 405 with Allow header for parametric route mismatch"
         .server_allocator = std.testing.allocator,
         .request_allocator = std.testing.allocator,
         .request = &req,
+        .path = req.head.target,
     };
 
     try TestServer.handleRequest(&router, ctx, &state, &req);
@@ -516,6 +518,7 @@ test "handleRequest falls back to parametric method when exact path lacks method
         .server_allocator = std.testing.allocator,
         .request_allocator = arena.allocator(),
         .request = &req,
+        .path = req.head.target,
     };
 
     try TestServer.handleRequest(&router, ctx, &state, &req);
@@ -561,6 +564,7 @@ test "handleRequest returns combined Allow header for overlapping path matches" 
         .server_allocator = std.testing.allocator,
         .request_allocator = std.testing.allocator,
         .request = &req,
+        .path = req.head.target,
     };
 
     try TestServer.handleRequest(&router, ctx, &state, &req);
@@ -606,6 +610,7 @@ test "handleRequest ignores websocket extractor errors" {
         .server_allocator = std.testing.allocator,
         .request_allocator = std.testing.allocator,
         .request = &req,
+        .path = req.head.target,
     };
 
     try TestServer.handleRequest(&router, ctx, &state, &req);
@@ -650,6 +655,7 @@ test "handleRequest prefers exact route over parametric overlap" {
         .server_allocator = std.testing.allocator,
         .request_allocator = arena.allocator(),
         .request = &req,
+        .path = req.head.target,
     };
 
     try TestServer.handleRequest(&router, ctx, &state, &req);
@@ -700,6 +706,7 @@ test "handleRequest applies parametric precedence by literal segments" {
         .server_allocator = std.testing.allocator,
         .request_allocator = arena.allocator(),
         .request = &req,
+        .path = req.head.target,
     };
 
     try TestServer.handleRequest(&router, ctx, &state, &req);
@@ -759,6 +766,7 @@ test "literal colon segment is treated as exact route" {
         .server_allocator = std.testing.allocator,
         .request_allocator = arena.allocator(),
         .request = &req,
+        .path = req.head.target,
     };
 
     try TestServer.handleRequest(&router, ctx, &state, &req);
@@ -801,6 +809,7 @@ test "router duplicates route path keys on registration" {
         .server_allocator = std.testing.allocator,
         .request_allocator = arena.allocator(),
         .request = &req,
+        .path = req.head.target,
     };
 
     try TestServer.handleRequest(&router, ctx, &state, &req);
@@ -899,6 +908,7 @@ test "middleware chain wraps next in order" {
         .server_allocator = std.testing.allocator,
         .request_allocator = arena.allocator(),
         .request = &req,
+        .path = req.head.target,
     };
 
     try TestServer.handleRequest(&router, ctx, &test_state, &req);
@@ -961,6 +971,7 @@ test "middleware can short-circuit and skip handler" {
         .server_allocator = std.testing.allocator,
         .request_allocator = arena.allocator(),
         .request = &req,
+        .path = req.head.target,
     };
 
     try TestServer.handleRequest(&router, ctx, &state, &req);
@@ -1030,6 +1041,7 @@ test "websocket upgrade requests run shared middleware chain" {
         .server_allocator = std.testing.allocator,
         .request_allocator = arena.allocator(),
         .request = &req,
+        .path = req.head.target,
     };
 
     try TestServer.handleRequest(&router, ctx, &state, &req);

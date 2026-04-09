@@ -24,18 +24,6 @@ const typed_query = @import("typed_query.zig");
 const header = @import("header.zig");
 const route_param = @import("route_param.zig");
 
-/// Returns the name of the first field in V whose type carries the
-/// `VOLT_REQUEST_CONTEXT` marker declaration. Used to locate the request
-/// context inside the handler parameter tuple without importing `http`.
-fn getContextFieldName(comptime V: type) ?[]const u8 {
-    inline for (@typeInfo(V).@"struct".fields) |f| {
-        if (@typeInfo(f.type) == .@"struct" and @hasDecl(f.type, "VOLT_REQUEST_CONTEXT") and @field(f.type, "VOLT_REQUEST_CONTEXT")) {
-            return f.name;
-        }
-    }
-    return null;
-}
-
 pub const Json = json.Json;
 pub const WebSocket = web_socket.WebSocket;
 pub const WebSocketError = web_socket.WebSocketError;
@@ -142,7 +130,6 @@ pub inline fn resolveParams(
     const func_params = comptime funcParams(Func);
     const func_param_types = comptime getParamsTypes(func_params);
     var params: Params(Func) = undefined;
-    const ctx_field = comptime getContextFieldName(Values);
     inline for (func_param_types, 0..func_params.len) |param_type, i| {
         if (comptime getFieldName(param_type, Values)) |n| {
             params[i] = @field(values, n);
@@ -150,15 +137,7 @@ pub inline fn resolveParams(
             comptime var resolved = false;
             inline for (extractor_resolvers) |Resolver| {
                 if (!resolved and comptime Resolver.matches(param_type)) {
-                    if (comptime ctx_field) |cf| {
-                        if (comptime @hasDecl(Resolver, "resolveWithContext")) {
-                            params[i] = Resolver.resolveWithContext(param_type, @field(values, cf));
-                        } else {
-                            params[i] = Resolver.resolve(param_type, request_allocator, req);
-                        }
-                    } else {
-                        params[i] = Resolver.resolve(param_type, request_allocator, req);
-                    }
+                    params[i] = Resolver.resolve(param_type, request_allocator, req);
                     resolved = true;
                 }
             }

@@ -43,14 +43,7 @@ pub const ConsoleLogger = struct {
     pub fn init(ctx: *Context) !Self {
         const req = ctx.request;
         const method = req.head.method;
-        const target = req.head.target;
         const version = req.head.version;
-
-        // Normalize target to remove query string
-        const path = if (std.mem.findScalar(u8, target, '?')) |idx|
-            target[0..idx]
-        else
-            target;
 
         // Format method as string (std.http.Method enum to string)
         const method_str = @tagName(method);
@@ -60,7 +53,7 @@ pub const ConsoleLogger = struct {
 
         return .{
             .method = method_str,
-            .path = path,
+            .path = ctx.path,
             .http_version = http_version_str,
             .io = ctx.io,
         };

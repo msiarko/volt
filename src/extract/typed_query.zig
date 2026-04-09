@@ -8,10 +8,12 @@ const std = @import("std");
 const utils = @import("utils.zig");
 const Context = @import("../http/context.zig").Context;
 
-fn freeTypedQueryFields(comptime T: type, arena: std.mem.Allocator, typed_query: *T) void {
-    inline for (@typeInfo(T).@"struct".fields) |field| {
-        if (@field(typed_query.*, field.name)) |field_value| {
-            arena.free(field_value);
+fn freeTypedQueryFields(comptime T: type, arena: std.mem.Allocator, typed_query: *T, owned: std.StaticBitSet(@typeInfo(T).@"struct".fields.len)) void {
+    inline for (@typeInfo(T).@"struct".fields, 0..) |field, fi| {
+        if (owned.isSet(fi)) {
+            if (@field(typed_query.*, field.name)) |field_value| {
+                arena.free(field_value);
+            }
         }
     }
 }
@@ -19,16 +21,36 @@ fn freeTypedQueryFields(comptime T: type, arena: std.mem.Allocator, typed_query:
 /// Parses request query parameters into a typed struct.
 ///
 /// Behavior:
-/// - Returns `.value = null` when no query string exists
-/// - Returns `.value = null` when all matched values are empty or absent
-/// - Returns `.value = typed_ptr` when at least one non-empty field matched
-/// - Returns `.value = err` on allocation failures
-/// - Query parameter names must match field names directly (encoded names are not matched)
+/// - Returns `.value = null` when no query string exists.
+/// - Returns `.value = null` when all matched values are empty or absent.
+/// - Returns `.value = typed_ptr` when at least one non-empty field matched.
+/// - Returns `.value = err` on allocation failures.
+///
+/// Ownership / decoding details:
+/// - Each field of the returned `*T` may be either:
+///   - a borrowed slice into the original request target (zero-copy, no allocation), or
+///   - an arena-allocated decoded copy when URL-decoding was required (percent-escapes or `+` → space).
+/// - Decoding is performed in a single pass. When the extractor must decode a value, it allocates the decoded
+///   bytes from the provided allocator and marks that specific field as owned.
+/// - The extractor tracks ownership per-field using the `_owned_fields` bitset on the `TypedQuery` value. This
+///   allows `deinit(allocator)` and error-path cleanup to free only the fields that were actually allocated,
+///   leaving borrowed slices untouched (safe for both arena and non-arena allocators).
+/// - If you use a request-scoped arena as the allocator (the common case), calling `deinit(...)` is optional
+///   for correctness because the arena will be freed at the end of the request. However, calling `deinit(...)` is
+///   recommended for deterministic cleanup and compatibility with non-arena allocators.
+///
+/// Matching rules:
+/// - Query parameter names must match field names directly (encoded names are not matched).
+/// - If a query key appears multiple times, the last matching value wins. Previously-owned values are freed
+///   only when they were allocated by the extractor.
 ///
 /// Compile errors:
-/// - `Type is not a struct`: `T` is not a struct type
-/// - `<field> field must be of type ?[]const u8`: invalid field type in `T`
-/// - `<field> field name must not require URL decoding`: encoded-style names are unsupported
+/// - `Type is not a struct`: `T` is not a struct type.
+/// - `<field> field must be of type ?[]const u8`: invalid field type in `T`.
+/// - `<field> field name must not require URL decoding`: encoded-style names are unsupported.
+///
+/// Note: The implementation uses `decodeQueryComponentAssumeNeeded` internally when a raw value is known to need
+/// decoding to avoid scanning the same bytes twice.
 fn initTypedQuery(comptime T: type, arena: std.mem.Allocator, req: *std.http.Server.Request) TypedQuery(T) {
     const type_info = @typeInfo(T);
     if (type_info != .@"struct") {
@@ -49,46 +71,53 @@ fn initTypedQuery(comptime T: type, arena: std.mem.Allocator, req: *std.http.Ser
     }
 
     var query_it = utils.queryIterator(req.head.target) orelse return .{ .value = null };
-    const typed_query = arena.create(T) catch |err| return .{ .value = err };
+
+    // Accumulate matches into a stack-local first; only heap-allocate once a
+    // match is confirmed so requests with no matching fields pay no alloc cost.
+    var local: T = undefined;
     inline for (fields) |field| {
-        @field(typed_query.*, field.name) = null;
+        @field(local, field.name) = null;
     }
 
+    // Tracks which fields hold arena-allocated strings vs. slices borrowed
+    // directly from the request target. Only allocated fields are freed on
+    // error paths and in deinit.
+    var owned: std.StaticBitSet(fields.len) = .initEmpty();
     var value_set = false;
     while (query_it.next()) |entry| {
-        inline for (fields) |field| {
+        inline for (fields, 0..) |field, fi| {
             if (std.ascii.eqlIgnoreCase(entry.key, field.name)) {
                 if (entry.value) |raw_value| {
-                    const value = if (utils.queryComponentNeedsDecoding(raw_value))
-                        utils.decodeQueryComponent(arena, raw_value) catch |err| {
-                            freeTypedQueryFields(T, arena, typed_query);
-                            arena.destroy(typed_query);
+                    const needs_decoding = utils.queryComponentNeedsDecoding(raw_value);
+                    const value = if (needs_decoding)
+                        utils.decodeQueryComponentAssumeNeeded(arena, raw_value) catch |err| {
+                            freeTypedQueryFields(T, arena, &local, owned);
                             return .{ .value = err };
                         }
                     else
-                        arena.dupe(u8, raw_value) catch |err| {
-                            freeTypedQueryFields(T, arena, typed_query);
-                            arena.destroy(typed_query);
-                            return .{ .value = err };
-                        };
+                        raw_value;
 
-                    if (@field(typed_query.*, field.name)) |previous| {
-                        arena.free(previous);
+                    if (@field(local, field.name)) |previous| {
+                        if (owned.isSet(fi)) arena.free(previous);
                     }
 
+                    owned.setValue(fi, needs_decoding);
                     value_set = true;
-                    @field(typed_query.*, field.name) = value;
+                    @field(local, field.name) = value;
                 }
             }
         }
     }
 
-    if (!value_set) {
-        arena.destroy(typed_query);
-        return .{ .value = null };
-    }
+    if (!value_set) return .{ .value = null };
 
-    return .{ .value = typed_query };
+    // At least one field matched: commit to a heap allocation and copy.
+    const typed_query = arena.create(T) catch |err| {
+        freeTypedQueryFields(T, arena, &local, owned);
+        return .{ .value = err };
+    };
+    typed_query.* = local;
+    return .{ .value = typed_query, ._owned_fields = owned };
 }
 
 /// Creates a TypedQuery extractor type for structured query parsing.
@@ -104,6 +133,10 @@ pub fn TypedQuery(comptime T: type) type {
 
         /// Parsed query object, null when no non-empty keys were matched.
         value: anyerror!?*T,
+        /// Tracks which fields of `*T` hold arena-allocated strings vs. slices
+        /// borrowed directly from the request target. Consulted by `deinit` and
+        /// error-path cleanup to avoid freeing non-owned memory.
+        _owned_fields: std.StaticBitSet(@typeInfo(T).@"struct".fields.len) = .initEmpty(),
 
         /// Releases typed query storage.
         ///
@@ -116,7 +149,7 @@ pub fn TypedQuery(comptime T: type) type {
         pub fn deinit(self: *Self, arena: std.mem.Allocator) void {
             const val = self.value catch return;
             if (val) |v| {
-                freeTypedQueryFields(T, arena, v);
+                freeTypedQueryFields(T, arena, v, self._owned_fields);
                 arena.destroy(v);
             }
         }
@@ -182,11 +215,6 @@ pub const Resolver = struct {
     pub fn resolve(comptime T: type, allocator: std.mem.Allocator, req: *std.http.Server.Request) T {
         const ExtractedType = Extracted(T);
         return initTypedQuery(ExtractedType, allocator, req);
-    }
-
-    pub fn resolveWithContext(comptime T: type, ctx: Context) T {
-        const ExtractedType = Extracted(T);
-        return TypedQuery(ExtractedType).fromContext(ctx);
     }
 };
 

@@ -7,7 +7,7 @@
 
 const std = @import("std");
 const Request = std.http.Server.Request;
-const StructField = std.builtin.Type.StructField;
+
 const Context = @import("../http/context.zig").Context;
 
 /// Extracts the configured HTTP header from the request.
@@ -48,8 +48,8 @@ pub fn Header(comptime name: []const u8) type {
         /// Compile-time marker used to identify Header extractor types.
         pub const VOLT_HEADER_EXTRACTOR = true;
 
-        /// HTTP header name this extractor resolves.
-        name: []const u8 = name,
+        /// Compile-time header name this extractor resolves.
+        pub const param_name: []const u8 = name;
         /// Extracted header value, or null when the header is absent.
         value: ?[]const u8,
 
@@ -87,13 +87,7 @@ fn getParamName(comptime T: type) []const u8 {
         @compileError("expected Header extractor type");
     }
 
-    inline for (@typeInfo(T).@"struct".fields) |field| {
-        if (std.mem.eql(u8, field.name, "name")) {
-            if (StructField.defaultValue(field)) |name| {
-                return name;
-            }
-        }
-    }
+    return T.param_name;
 }
 
 /// Resolver for Header extractors in the compile-time registry.
@@ -112,11 +106,6 @@ pub const Resolver = struct {
         _ = allocator;
         const param_name = comptime getParamName(T);
         return initHeader(param_name, req);
-    }
-
-    pub fn resolveWithContext(comptime T: type, ctx: Context) T {
-        const param_name = comptime getParamName(T);
-        return Header(param_name).fromContext(ctx);
     }
 };
 
@@ -258,4 +247,3 @@ test "init table-driven header extraction" {
         }
     }
 }
-
