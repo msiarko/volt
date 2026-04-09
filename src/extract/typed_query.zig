@@ -24,10 +24,12 @@ fn freeTypedQueryFields(comptime T: type, arena: std.mem.Allocator, typed_query:
 /// - Returns `.value = null` when all matched values are empty or absent
 /// - Returns `.value = typed_ptr` when at least one non-empty field matched
 /// - Returns `.value = err` on allocation failures
+/// - Query parameter names must match field names directly (encoded names are not matched)
 ///
 /// Compile errors:
 /// - `Type is not a struct`: `T` is not a struct type
 /// - `<field> field must be of type ?[]const u8`: invalid field type in `T`
+/// - `<field> field name must not require URL decoding`: encoded-style names are unsupported
 fn initTypedQuery(comptime T: type, arena: std.mem.Allocator, req: *std.http.Server.Request) TypedQuery(T) {
     const type_info = @typeInfo(T);
     if (type_info != .@"struct") {
@@ -40,6 +42,10 @@ fn initTypedQuery(comptime T: type, arena: std.mem.Allocator, req: *std.http.Ser
             if (field.type != ?[]const u8) {
                 @compileError(field.name ++ " field must be of type ?[]const u8");
             }
+
+            if (utils.queryComponentNeedsDecoding(field.name)) {
+                @compileError(field.name ++ " field name must not require URL decoding");
+            }
         }
     }
 
@@ -51,17 +57,8 @@ fn initTypedQuery(comptime T: type, arena: std.mem.Allocator, req: *std.http.Ser
 
     var value_set = false;
     while (query_it.next()) |entry| {
-        const key = if (utils.queryComponentNeedsDecoding(entry.key))
-            utils.decodeQueryComponent(arena, entry.key) catch |err| {
-                freeTypedQueryFields(T, arena, typed_query);
-                arena.destroy(typed_query);
-                return .{ .value = err };
-            }
-        else
-            entry.key;
-
         inline for (fields) |field| {
-            if (std.ascii.eqlIgnoreCase(key, field.name)) {
+            if (std.ascii.eqlIgnoreCase(entry.key, field.name)) {
                 if (entry.value) |raw_value| {
                     const value = if (utils.queryComponentNeedsDecoding(raw_value))
                         utils.decodeQueryComponent(arena, raw_value) catch |err| {
@@ -544,4 +541,35 @@ test "init decodes double-encoded typed query value only once" {
 
     const filters = (try typed_query.value) orelse unreachable;
     try std.testing.expectEqualStrings("hello%20world", filters.name.?);
+}
+
+test "init does not match encoded typed query keys" {
+    const Filters = struct {
+        first_name: ?[]const u8,
+    };
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const req_bytes = std.fmt.comptimePrint("GET /users?first%5fname=Zig HTTP/1.1\r\n\r\n", .{});
+    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+
+    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+    var http_req = try http_server.receiveHead();
+
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request = &http_req,
+        .request_allocator = arena.allocator(),
+        ._cache = null,
+    };
+
+    var typed_query = TypedQuery(Filters).fromContext(test_ctx);
+    defer typed_query.deinit(arena.allocator());
+
+    try std.testing.expectEqual(null, try typed_query.value);
 }

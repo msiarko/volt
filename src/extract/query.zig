@@ -18,12 +18,7 @@ const Context = @import("../http/context.zig").Context;
 fn initQuery(comptime name: []const u8, allocator: std.mem.Allocator, req: *Request) Query(name) {
     var query_it = utils.queryIterator(req.head.target) orelse return .{ .value = null };
     while (query_it.next()) |entry| {
-        const key = if (utils.queryComponentNeedsDecoding(entry.key))
-            utils.decodeQueryComponent(allocator, entry.key) catch continue
-        else
-            entry.key;
-
-        if (std.ascii.eqlIgnoreCase(key, name)) {
+        if (utils.queryComponentEqualsAsciiIgnoreCaseDecoded(entry.key, name)) {
             const value = if (entry.value) |raw_value|
                 if (utils.queryComponentNeedsDecoding(raw_value))
                     utils.decodeQueryComponent(allocator, raw_value) catch null

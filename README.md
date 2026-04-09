@@ -308,6 +308,11 @@ fn getTeamUser(
 
 ### Typed Query Extraction
 
+Behavior notes:
+
+- TypedQuery matches query parameter names directly to struct field names (encoded names are not matched).
+- TypedQuery applies single-pass URL decoding to matched values (`%XX` and `+` as space).
+
 ```zig
 const UserFilters = struct {
     name: ?[]const u8,

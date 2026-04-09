@@ -51,6 +51,38 @@ fn decodeHexNibble(c: u8) ?u8 {
     };
 }
 
+pub fn queryComponentEqualsAsciiIgnoreCaseDecoded(component: []const u8, expected: []const u8) bool {
+    var i: usize = 0;
+    var j: usize = 0;
+
+    while (i < component.len) {
+        const decoded = blk: {
+            const c = component[i];
+            if (c == '+') {
+                i += 1;
+                break :blk ' ';
+            }
+
+            if (c == '%') {
+                if (i + 2 >= component.len) return false;
+                const hi = decodeHexNibble(component[i + 1]) orelse return false;
+                const lo = decodeHexNibble(component[i + 2]) orelse return false;
+                i += 3;
+                break :blk (hi << 4) | lo;
+            }
+
+            i += 1;
+            break :blk c;
+        };
+
+        if (j >= expected.len) return false;
+        if (std.ascii.toLower(decoded) != std.ascii.toLower(expected[j])) return false;
+        j += 1;
+    }
+
+    return j == expected.len;
+}
+
 pub fn decodeQueryComponent(allocator: std.mem.Allocator, component: []const u8) ![]const u8 {
     if (!queryComponentNeedsDecoding(component)) return component;
 
@@ -118,4 +150,10 @@ test "decodeQueryComponent fails on malformed percent escape" {
     defer arena.deinit();
 
     try testing.expectError(error.InvalidPercentEncoding, decodeQueryComponent(arena.allocator(), "bad%2"));
+}
+
+test "queryComponentEqualsAsciiIgnoreCaseDecoded matches encoded key" {
+    try testing.expect(queryComponentEqualsAsciiIgnoreCaseDecoded("first%20name", "first name"));
+    try testing.expect(queryComponentEqualsAsciiIgnoreCaseDecoded("X-REQUEST-ID", "x-request-id"));
+    try testing.expect(!queryComponentEqualsAsciiIgnoreCaseDecoded("first%2", "first "));
 }
