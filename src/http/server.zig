@@ -194,10 +194,22 @@ pub fn Server(comptime State: type) type {
 
         fn receiveRequest(http_server: *std.http.Server) ?HttpRequest {
             return http_server.receiveHead() catch |err| {
-                if (err != error.HttpConnectionClosing) {
+                if (!isExpectedConnectionCloseError(err)) {
                     std.log.err("Failed to receive head: {}", .{err});
                 }
                 return null;
+            };
+        }
+
+        fn isExpectedConnectionCloseError(err: anyerror) bool {
+            return switch (err) {
+                error.HttpConnectionClosing,
+                error.ReadFailed,
+                error.EndOfStream,
+                error.ConnectionResetByPeer,
+                error.BrokenPipe,
+                => true,
+                else => false,
             };
         }
 

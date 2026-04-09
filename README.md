@@ -4,6 +4,8 @@
 
 A modern, type-safe web library for Zig with automatic parameter injection and WebSocket support.
 
+> **Disclaimer**: Volt is **not** designed to be the fastest or most efficient HTTP library. It is built on top of Zig's standard `std.http` module and prioritizes **developer ergonomics over raw performance**. The primary goal is to enable **quick prototyping of REST APIs** with a flexible, type-safe interface. **Do not use Volt in production** — it is intended for development and prototyping purposes only.
+
 ## Features
 
 - ✨ **Designed for usability**: Clear abstractions and automatic parameter handling
