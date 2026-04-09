@@ -7,11 +7,24 @@
 
 const std = @import("std");
 const Request = std.http.Server.Request;
-const utils = @import("utils.zig");
 const StructField = std.builtin.Type.StructField;
+const Context = @import("../http/context.zig").Context;
 
-/// Key used to identify Header extractor types at compile time.
-const HEADER_EXTRACTOR_KEY: []const u8 = "HEADER_EXTRACTOR";
+/// Extracts the configured HTTP header from the request.
+///
+/// Iterates over all request headers and returns the value of the first
+/// header whose name equals `name`. Returns `null` when no matching
+/// header is found.
+fn initHeader(comptime name: []const u8, req: *Request) Header(name) {
+    var header_it = req.iterateHeaders();
+    while (header_it.next()) |entry| {
+        if (std.ascii.eqlIgnoreCase(entry.name, name)) {
+            return .{ .value = entry.value };
+        }
+    }
+
+    return .{ .value = null };
+}
 
 /// Creates a Header extractor type for a specific HTTP header name.
 ///
@@ -32,27 +45,35 @@ pub fn Header(comptime name: []const u8) type {
     return struct {
         const Self = @This();
 
-        /// Extractor key for type identification.
-        key: []const u8 = HEADER_EXTRACTOR_KEY,
+        /// Compile-time marker used to identify Header extractor types.
+        pub const VOLT_HEADER_EXTRACTOR = true;
+
         /// HTTP header name this extractor resolves.
         name: []const u8 = name,
         /// Extracted header value, or null when the header is absent.
         value: ?[]const u8,
 
-        /// Extracts the configured HTTP header from the request.
+        /// Extracts the configured HTTP header from request context.
         ///
-        /// Iterates over all request headers and returns the value of the first
-        /// header whose name equals `name`. Returns `null` when no matching
-        /// header is found.
-        pub fn init(req: *Request) Self {
-            var header_it = req.iterateHeaders();
-            while (header_it.next()) |entry| {
-                if (std.ascii.eqlIgnoreCase(entry.name, name)) {
-                    return .{ .value = entry.value };
-                }
-            }
-
-            return .{ .value = null };
+        /// When a request context is available, use this method for manual extraction.
+        ///
+        /// Parameters:
+        /// - `ctx`: Request context (any type with request field). Use `ctx.io` for
+        ///   any I/O operations required within the surrounding handler.
+        ///
+        /// Returns: Header extractor with the header value or null
+        ///
+        /// Example usage in a handler body:
+        /// ```zig
+        /// fn handleRequest(ctx: Context, state: *MyState) !Response {
+        ///     const auth = Header("Authorization").fromContext(ctx);
+        ///     if (auth.value) |token| {
+        ///         // Use token...
+        ///     }
+        /// }
+        /// ```
+        pub fn fromContext(ctx: Context) Self {
+            return initHeader(name, ctx.request);
         }
     };
 }
@@ -82,13 +103,20 @@ fn getParamName(comptime T: type) []const u8 {
 /// resolution.
 pub const Resolver = struct {
     pub fn matches(comptime T: type) bool {
-        return utils.matches(T, HEADER_EXTRACTOR_KEY);
+        return @typeInfo(T) == .@"struct" and
+            @hasDecl(T, "VOLT_HEADER_EXTRACTOR") and
+            @field(T, "VOLT_HEADER_EXTRACTOR");
     }
 
     pub fn resolve(comptime T: type, allocator: std.mem.Allocator, req: *Request) T {
         _ = allocator;
         const param_name = comptime getParamName(T);
-        return Header(param_name).init(req);
+        return initHeader(param_name, req);
+    }
+
+    pub fn resolveWithContext(comptime T: type, ctx: Context) T {
+        const param_name = comptime getParamName(T);
+        return Header(param_name).fromContext(ctx);
     }
 };
 
@@ -119,7 +147,13 @@ test "init returns Header with value when header is present" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const header = Header("Authorization").init(&http_req);
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request_allocator = std.testing.allocator,
+        .request = &http_req,
+    };
+    const header = Header("Authorization").fromContext(test_ctx);
 
     try std.testing.expect(header.value != null);
     try std.testing.expectEqualStrings("Bearer token123", header.value.?);
@@ -135,7 +169,13 @@ test "init returns Header with value when multiple headers are present" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const header = Header("X-Request-Id").init(&http_req);
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request_allocator = std.testing.allocator,
+        .request = &http_req,
+    };
+    const header = Header("X-Request-Id").fromContext(test_ctx);
 
     try std.testing.expect(header.value != null);
     try std.testing.expectEqualStrings("abc-123", header.value.?);
@@ -151,7 +191,13 @@ test "init returns null when header is not present" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const header = Header("Authorization").init(&http_req);
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request_allocator = std.testing.allocator,
+        .request = &http_req,
+    };
+    const header = Header("Authorization").fromContext(test_ctx);
 
     try std.testing.expectEqual(null, header.value);
 }
@@ -166,7 +212,13 @@ test "init returns null when no headers are present" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const header = Header("Authorization").init(&http_req);
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request_allocator = std.testing.allocator,
+        .request = &http_req,
+    };
+    const header = Header("Authorization").fromContext(test_ctx);
 
     try std.testing.expectEqual(null, header.value);
 }
@@ -191,7 +243,13 @@ test "init table-driven header extraction" {
         var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
         var http_req = try http_server.receiveHead();
 
-        const header = Header("Authorization").init(&http_req);
+        const test_ctx: Context = .{
+            .io = undefined,
+            .server_allocator = std.testing.allocator,
+            .request_allocator = std.testing.allocator,
+            .request = &http_req,
+        };
+        const header = Header("Authorization").fromContext(test_ctx);
 
         if (case.expected) |expected| {
             try std.testing.expectEqualStrings(expected, header.value.?);
@@ -200,3 +258,4 @@ test "init table-driven header extraction" {
         }
     }
 }
+

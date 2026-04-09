@@ -1,54 +1,8 @@
 //! Utility functions for extractor type identification.
 //!
-//! This module provides compile-time utilities for identifying extractor types
-//! through structural reflection. Extract types use a "key" field with a default
-//! value to identify themselves, allowing the router to automatically detect
-//! and handle different parameter types.
+//! This module provides helper utilities shared by extractors.
 
 const std = @import("std");
-const StructField = std.builtin.Type.StructField;
-
-/// Checks if a type is a specific extractor by examining its structure.
-///
-/// This function performs compile-time reflection to determine if the given
-/// type has a field named "key" with a default value that matches the provided
-/// extractor key. This pattern allows extract types to be identified automatically
-/// by the router's parameter injection system.
-///
-/// Parameters:
-/// - `T`: The type to check for extractor identification
-/// - `extractor_key`: The key value that identifies the extractor type
-///
-/// Returns: true if T has a "key" field with the matching default value
-///
-/// Example usage:
-/// ```zig
-/// const MyExtractor = struct {
-///     key: []const u8 = "MY_EXTRACTOR",
-///     // ... other fields
-/// };
-///
-/// // Check if a type is the MyExtractor
-/// const isMyExtractor = comptime matches(MyExtractor, "MY_EXTRACTOR"); // true
-///
-/// const OtherType = struct { name: []const u8 };
-/// const isOther = comptime matches(OtherType, "MY_EXTRACTOR"); // false
-/// ```
-///
-/// This is used internally by extract types like WebSocket and JSON to enable
-/// automatic parameter detection in route handlers.
-pub fn matches(comptime T: type, comptime extractor_key: []const u8) bool {
-    const t = @typeInfo(T);
-    for (t.@"struct".fields) |field| {
-        if (std.mem.eql(u8, field.name, "key")) {
-            if (StructField.defaultValue(field)) |k| {
-                return std.mem.eql(u8, k, extractor_key);
-            }
-        }
-    }
-
-    return false;
-}
 
 pub const QueryEntry = struct {
     key: []const u8,
@@ -81,25 +35,114 @@ pub fn queryIterator(target: []const u8) ?QueryIterator {
     return .{ .parts = std.mem.splitScalar(u8, target[start_idx..], '&') };
 }
 
+pub fn queryComponentNeedsDecoding(component: []const u8) bool {
+    for (component) |c| {
+        if (c == '%' or c == '+') return true;
+    }
+    return false;
+}
+
+fn decodeHexNibble(c: u8) ?u8 {
+    return switch (c) {
+        '0'...'9' => c - '0',
+        'a'...'f' => 10 + (c - 'a'),
+        'A'...'F' => 10 + (c - 'A'),
+        else => null,
+    };
+}
+
+pub fn queryComponentEqualsAsciiIgnoreCaseDecoded(component: []const u8, expected: []const u8) bool {
+    var i: usize = 0;
+    var j: usize = 0;
+
+    while (i < component.len) {
+        const decoded = blk: {
+            const c = component[i];
+            if (c == '+') {
+                i += 1;
+                break :blk ' ';
+            }
+
+            if (c == '%') {
+                if (i + 2 >= component.len) return false;
+                const hi = decodeHexNibble(component[i + 1]) orelse return false;
+                const lo = decodeHexNibble(component[i + 2]) orelse return false;
+                i += 3;
+                break :blk (hi << 4) | lo;
+            }
+
+            i += 1;
+            break :blk c;
+        };
+
+        if (j >= expected.len) return false;
+        if (std.ascii.toLower(decoded) != std.ascii.toLower(expected[j])) return false;
+        j += 1;
+    }
+
+    return j == expected.len;
+}
+
+pub fn decodeQueryComponent(allocator: std.mem.Allocator, component: []const u8) ![]const u8 {
+    if (!queryComponentNeedsDecoding(component)) return component;
+
+    // First pass validates percent-escapes and computes decoded output length.
+    var decoded_len: usize = 0;
+    var i: usize = 0;
+    while (i < component.len) {
+        const c = component[i];
+        if (c == '+') {
+            decoded_len += 1;
+            i += 1;
+            continue;
+        }
+
+        if (c == '%') {
+            if (i + 2 >= component.len) return error.InvalidPercentEncoding;
+
+            const hi = decodeHexNibble(component[i + 1]) orelse return error.InvalidPercentEncoding;
+            const lo = decodeHexNibble(component[i + 2]) orelse return error.InvalidPercentEncoding;
+            _ = hi;
+            _ = lo;
+            decoded_len += 1;
+            i += 3;
+            continue;
+        }
+
+        decoded_len += 1;
+        i += 1;
+    }
+
+    const out = try allocator.alloc(u8, decoded_len);
+    var out_i: usize = 0;
+    i = 0;
+    while (i < component.len) {
+        const c = component[i];
+        if (c == '+') {
+            out[out_i] = ' ';
+            out_i += 1;
+            i += 1;
+            continue;
+        }
+
+        if (c == '%') {
+            const hi = decodeHexNibble(component[i + 1]).?;
+            const lo = decodeHexNibble(component[i + 2]).?;
+            out[out_i] = (hi << 4) | lo;
+            out_i += 1;
+            i += 3;
+            continue;
+        }
+
+        out[out_i] = c;
+        out_i += 1;
+        i += 1;
+    }
+
+    return out;
+}
+
 const testing = std.testing;
-
-test "matches returns true for matching type" {
-    const result = comptime matches(struct { key: []const u8 = "WS_EXTRACTOR" }, "WS_EXTRACTOR");
-
-    try testing.expect(result);
-}
-
-test "matches returns false for non-matching type" {
-    const result = comptime matches(struct { key: []const u8 = "OTHER" }, "WS_EXTRACTOR");
-
-    try testing.expect(!result);
-}
-
-test "matches returns false when key has no default value" {
-    const result = comptime matches(struct { key: []const u8 }, "WS_EXTRACTOR");
-
-    try testing.expect(!result);
-}
 
 test "queryIterator yields key value pairs" {
     var it = queryIterator("/users?name=zig&role=admin") orelse unreachable;
@@ -117,4 +160,32 @@ test "queryIterator yields key value pairs" {
 
 test "queryIterator returns null for missing query string" {
     try testing.expectEqual(null, queryIterator("/users"));
+}
+
+test "decodeQueryComponent decodes percent escapes and plus" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const decoded = try decodeQueryComponent(arena.allocator(), "first+name%3Dzig%20lang");
+    try testing.expectEqualStrings("first name=zig lang", decoded);
+}
+
+test "decodeQueryComponent fails on malformed percent escape" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    try testing.expectError(error.InvalidPercentEncoding, decodeQueryComponent(arena.allocator(), "bad%2"));
+}
+
+test "decodeQueryComponent returns allocation-sized slice" {
+    const decoded = try decodeQueryComponent(testing.allocator, "a%20b");
+    defer testing.allocator.free(decoded);
+
+    try testing.expectEqualStrings("a b", decoded);
+}
+
+test "queryComponentEqualsAsciiIgnoreCaseDecoded matches encoded key" {
+    try testing.expect(queryComponentEqualsAsciiIgnoreCaseDecoded("first%20name", "first name"));
+    try testing.expect(queryComponentEqualsAsciiIgnoreCaseDecoded("X-REQUEST-ID", "x-request-id"));
+    try testing.expect(!queryComponentEqualsAsciiIgnoreCaseDecoded("first%2", "first "));
 }

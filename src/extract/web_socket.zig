@@ -4,15 +4,16 @@
 //! router's parameter injection system. When a handler parameter is detected
 //! as a WebSocket type, the library automatically handles the HTTP upgrade
 //! handshake and provides the WebSocket connection to the handler.
+//!
+//! Applications that want more control can skip the automatic extractor and
+//! use `ctx.request` directly from `Context` to inspect or manage the upgrade
+//! flow themselves.
 
 const std = @import("std");
 const Request = std.http.Server.Request;
 const StructField = std.builtin.Type.StructField;
 const Socket = std.http.Server.WebSocket;
-const utils = @import("utils.zig");
-
-/// Key used to identify WebSocket extractor types at compile time.
-const WS_EXTRACTOR_KEY: []const u8 = "WS_EXTRACTOR";
+const Context = @import("../http/context.zig").Context;
 
 pub const WebSocketError = error{
     /// Failed to perform WebSocket upgrade handshake.
@@ -31,14 +32,40 @@ pub const WebSocketError = error{
 /// automatic detection and instantiation of WebSocket extractor types during parameter resolution.
 pub const Resolver = struct {
     pub fn matches(comptime T: type) bool {
-        return utils.matches(T, WS_EXTRACTOR_KEY);
+        return @typeInfo(T) == .@"struct" and
+            @hasDecl(T, "VOLT_WEBSOCKET_EXTRACTOR") and
+            @field(T, "VOLT_WEBSOCKET_EXTRACTOR");
     }
 
     pub fn resolve(comptime T: type, allocator: std.mem.Allocator, req: *Request) T {
         _ = allocator;
-        return WebSocket.init(req);
+        return initWebSocket(req);
+    }
+
+    pub fn resolveWithContext(comptime T: type, ctx: Context) T {
+        return WebSocket.fromContext(ctx);
     }
 };
+
+/// Attempts to upgrade the connection to WebSocket.
+///
+/// Returns a WebSocket error on failure (missing key, not an upgrade request, etc.)
+fn initWebSocket(req: *Request) WebSocket {
+    const upg = req.upgradeRequested();
+    return switch (upg) {
+        .websocket => |key| {
+            if (key) |k| {
+                var ws = req.respondWebSocket(.{ .key = k }) catch return .{ .socket = WebSocketError.WebSocketUpgradeFailed };
+                ws.flush() catch return .{ .socket = WebSocketError.WebSocketUpgradeFailed };
+                defer ws.flush() catch {};
+                return .{ .socket = ws };
+            }
+
+            return .{ .socket = WebSocketError.WebSocketKeyMissing };
+        },
+        else => return .{ .socket = WebSocketError.NotWebSocketUpgrade },
+    };
+}
 
 /// WebSocket extractor and upgrade handler.
 ///
@@ -57,26 +84,26 @@ pub const Resolver = struct {
 pub const WebSocket = struct {
     const Self = @This();
 
-    /// Extractor key for type identification
-    key: []const u8 = WS_EXTRACTOR_KEY,
+    /// Compile-time marker used to identify WebSocket extractor types.
+    pub const VOLT_WEBSOCKET_EXTRACTOR = true;
+
     /// The underlying WebSocket connection
     socket: WebSocketError!Socket,
 
-    pub fn init(req: *Request) WebSocket {
-        const upg = req.upgradeRequested();
-        return switch (upg) {
-            .websocket => |key| {
-                if (key) |k| {
-                    var ws = req.respondWebSocket(.{ .key = k }) catch return .{ .socket = WebSocketError.WebSocketUpgradeFailed };
-                    ws.flush() catch return .{ .socket = WebSocketError.WebSocketUpgradeFailed };
-                    defer ws.flush() catch {};
-                    return .{ .socket = ws };
-                }
-
-                return .{ .socket = WebSocketError.WebSocketKeyMissing };
-            },
-            else => return .{ .socket = WebSocketError.NotWebSocketUpgrade },
-        };
+    /// Upgrades the request connection to WebSocket from request context.
+    ///
+    /// When a request context is available, use this method for manual extraction.
+    /// This still performs Volt's automatic handshake behavior. If you need
+    /// lower-level control over when or how the upgrade happens, use
+    /// `ctx.request` directly instead.
+    ///
+    /// Parameters:
+    /// - `ctx`: Request context (any type with request field). Use `ctx.io` for
+    ///   any I/O operations required within the surrounding handler.
+    ///
+    /// Returns: WebSocket extractor with upgraded socket or error
+    pub fn fromContext(ctx: Context) Self {
+        return initWebSocket(ctx.request);
     }
 
     fn getParamsTypes(comptime params_len: usize, comptime args_fields: []const StructField) []const type {
@@ -169,6 +196,13 @@ test "init returns NotWebSocketUpgrade for regular HTTP request" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const ws = WebSocket.init(&http_req);
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request_allocator = std.testing.allocator,
+        .request = &http_req,
+    };
+    const ws = WebSocket.fromContext(test_ctx);
     try std.testing.expectError(WebSocketError.NotWebSocketUpgrade, ws.socket);
 }
+
