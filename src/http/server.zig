@@ -268,6 +268,17 @@ pub fn Server(comptime State: type) type {
             route_pattern: ?[]const u8,
             req: *HttpRequest,
         ) !void {
+            if (router.middleware_factories.items.len == 0) {
+                const res = handler.execute(ctx, state, route_pattern, req) catch |err| {
+                    if (utils.isMemberOfErrorSet(extract.WebSocketError, err)) return;
+                    try req.respond(@errorName(err), .{ .status = .internal_server_error });
+                    return;
+                };
+
+                try response.respond(req, res);
+                return;
+            }
+
             // Create a fresh middleware chain for this request
             // Middleware can choose allocator via Context
             var middleware_ctx = ctx;
@@ -347,7 +358,7 @@ test "handleRequest returns 405 for method mismatch" {
     defer router.deinit();
 
     const handlers = struct {
-        fn postOnly(ctx: Context, _: *void) !Response {
+        fn postOnly(ctx: Context) !Response {
             return Response.text(ctx.request_allocator, .ok, "ok", null);
         }
     };
@@ -389,7 +400,7 @@ test "handleRequest ignores websocket extractor errors" {
             _ = socket;
         }
 
-        fn websocketRoute(ctx: Context, _: *void, ws: extract.WebSocket) !Response {
+        fn websocketRoute(ctx: Context, ws: extract.WebSocket) !Response {
             try ws.onConnected(noop, .{});
             return Response.ok(ctx.request_allocator, null, null);
         }
@@ -425,11 +436,11 @@ test "handleRequest prefers exact route over parametric overlap" {
     defer router.deinit();
 
     const handlers = struct {
-        fn exact(ctx: Context, _: *void) !Response {
+        fn exact(ctx: Context) !Response {
             return Response.text(ctx.request_allocator, .ok, "exact", null);
         }
 
-        fn param(ctx: Context, _: *void, id: extract.RouteParam("id")) !Response {
+        fn param(ctx: Context, id: extract.RouteParam("id")) !Response {
             _ = id;
             return Response.text(ctx.request_allocator, .ok, "param", null);
         }
@@ -472,13 +483,13 @@ test "handleRequest applies parametric precedence by literal segments" {
     defer router.deinit();
 
     const handlers = struct {
-        fn generic(ctx: Context, _: *void, entity: extract.RouteParam("entity"), id: extract.RouteParam("id")) !Response {
+        fn generic(ctx: Context, entity: extract.RouteParam("entity"), id: extract.RouteParam("id")) !Response {
             _ = entity;
             _ = id;
             return Response.text(ctx.request_allocator, .ok, "generic", null);
         }
 
-        fn users(ctx: Context, _: *void, id: extract.RouteParam("id")) !Response {
+        fn users(ctx: Context, id: extract.RouteParam("id")) !Response {
             _ = id;
             return Response.text(ctx.request_allocator, .ok, "users", null);
         }
@@ -520,7 +531,7 @@ test "router rejects duplicate placeholder names in same route" {
     defer router.deinit();
 
     const handlers = struct {
-        fn duplicate(ctx: Context, _: *void, id: extract.RouteParam("id")) !Response {
+        fn duplicate(ctx: Context, id: extract.RouteParam("id")) !Response {
             _ = id;
             return Response.text(ctx.request_allocator, .ok, "ok", null);
         }
@@ -540,7 +551,7 @@ test "literal colon segment is treated as exact route" {
     defer router.deinit();
 
     const handlers = struct {
-        fn literal(ctx: Context, _: *void) !Response {
+        fn literal(ctx: Context) !Response {
             return Response.text(ctx.request_allocator, .ok, "literal", null);
         }
     };
@@ -580,7 +591,7 @@ test "router duplicates route path keys on registration" {
     defer router.deinit();
 
     const handlers = struct {
-        fn owned(ctx: Context, _: *void) !Response {
+        fn owned(ctx: Context) !Response {
             return Response.text(ctx.request_allocator, .ok, "owned", null);
         }
     };

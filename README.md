@@ -73,6 +73,9 @@ fn indexHandler(ctx: volt.Context) !volt.Response {
 }
 ```
 
+For `volt.Server(void)`, handlers must omit the state parameter entirely.
+Using `*void` as a handler state parameter is rejected at compile time.
+
 ## Routing
 
 Volt provides a clean routing API with support for all HTTP methods:

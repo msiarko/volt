@@ -27,6 +27,11 @@ const middleware = @import("middleware.zig");
 ///     _ = data; // JSON body deserialized to MyStruct
 ///     return Response.ok();
 /// }
+///
+/// // Stateless handlers for Server(void) should omit state entirely.
+/// fn health(ctx: Context) !Response {
+///     return Response.ok(ctx.request_allocator, null, null);
+/// }
 /// ```
 pub fn Router(comptime State: type) type {
     return struct {
@@ -198,7 +203,10 @@ pub fn Router(comptime State: type) type {
         /// - `handler`: Function that handles GET requests to this path
         ///
         /// The handler function signature should be:
-        /// `fn(ctx: Context, state: *State, ...) !Response`
+        /// - for `Server(State)`: `fn(ctx: Context, state: *State, ...) !Response`
+        /// - for `Server(void)`: `fn(ctx: Context, ...) !Response`
+        ///
+        /// `*void` state parameters are rejected at compile time for `Server(void)`.
         pub fn get(self: *Self, path: []const u8, handler: anytype) !void {
             try self.addRoute(.GET, path, makeHandler(handler));
         }
@@ -345,6 +353,16 @@ pub fn Router(comptime State: type) type {
             const ret_type_info = @typeInfo(RetType);
             if (ret_type_info != .error_union or ret_type_info.error_union.payload != Response) {
                 @compileError("handler must return !Response");
+            }
+
+            if (comptime State == void) {
+                inline for (func_type_info.@"fn".params) |param| {
+                    if (param.type) |param_type| {
+                        if (param_type == *void) {
+                            @compileError("for Server(void), handlers must not declare a *void state parameter; omit the state argument entirely");
+                        }
+                    }
+                }
             }
 
             return .init(FuncPtr, @ptrCast(handler));
