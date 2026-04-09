@@ -40,6 +40,12 @@ pub const Cache = std.StringHashMap(*anyopaque);
 ///     // Manual extraction for full control:
 ///     const body = extract.Json(MyStruct).fromContext(ctx);
 ///
+///     // For lower-level control, use the raw request directly.
+///     // This is useful when you want to manage protocol details yourself,
+///     // such as custom WebSocket upgrade handling.
+///     const req = ctx.request;
+///     _ = req;
+///
 ///     // Use ctx.server_allocator for data that must outlive the request
 ///     const persistent = try ctx.server_allocator.dupe(u8, some_data);
 ///     _ = persistent; // caller must free this
@@ -65,10 +71,16 @@ pub const Context = struct {
     request_allocator: std.mem.Allocator,
 
     /// Raw HTTP request. Valid only for the lifetime of the current request.
-    /// Use this to call extractors manually inside handler bodies:
+    /// Use this to call extractors manually inside handler bodies, or to take
+    /// lower-level control over request handling when you do not want Volt's
+    /// automatic extraction path to perform work on your behalf.
     ///
     ///     const body = extract.Json(MyType).fromContext(ctx);
     ///     const q    = extract.Query("name").fromContext(ctx);
+    ///
+    /// For protocol-specific control, such as handling a WebSocket upgrade
+    /// directly, operate on `ctx.request` yourself instead of using the
+    /// automatic extractor.
     ///
     /// Do not store this pointer in state that outlives the request.
     request: *Request,

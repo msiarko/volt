@@ -30,6 +30,24 @@ const volt = b.dependency("volt", .{});
 exe.root_module.addImport("volt", volt.module("volt"));
 ```
 
+## Configuration
+
+Volt currently exposes one build option:
+
+- `shutdown_timeout_seconds` (`u32`, default `5`): Graceful shutdown timeout for waiting on active HTTP connection tasks before force-canceling them.
+
+Pass options through the dependency config in your `build.zig`:
+
+```zig
+const volt = b.dependency("volt", .{
+    .target = target,
+    .optimize = optimize,
+    .shutdown_timeout_seconds = 10,
+});
+
+exe.root_module.addImport("volt", volt.module("volt"));
+```
+
 ## Quick Start
 
 Here's a simple "Hello World" server:
@@ -475,7 +493,7 @@ Volt is built around several key components:
 
 ## Status & Roadmap
 
-**Current Version**: 0.0.4 (Early Development)
+**Current Version**: 0.0.5 (Early Development)
 
 **Requirements**: Nightly Zig only (0.16.0-dev or later). Stable Zig releases are not supported.
 

@@ -4,6 +4,10 @@
 //! router's parameter injection system. When a handler parameter is detected
 //! as a WebSocket type, the library automatically handles the HTTP upgrade
 //! handshake and provides the WebSocket connection to the handler.
+//!
+//! Applications that want more control can skip the automatic extractor and
+//! use `ctx.request` directly from `Context` to inspect or manage the upgrade
+//! flow themselves.
 
 const std = @import("std");
 const Request = std.http.Server.Request;
@@ -89,6 +93,9 @@ pub const WebSocket = struct {
     /// Upgrades the request connection to WebSocket from request context.
     ///
     /// When a request context is available, use this method for manual extraction.
+    /// This still performs Volt's automatic handshake behavior. If you need
+    /// lower-level control over when or how the upgrade happens, use
+    /// `ctx.request` directly instead.
     ///
     /// Parameters:
     /// - `ctx`: Request context (any type with request field). Use `ctx.io` for

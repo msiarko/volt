@@ -10,6 +10,9 @@
 //! - Automatic extraction should remove boilerplate, not hide control.
 //! - The same extractors are available manually via `fromContext` when handlers
 //!   want explicit extraction order, branching, or custom error mapping.
+//! - Handlers can mix styles: use automatic injection for simple cases and
+//!   manual extraction from `Context` for request-specific control.
+//! - For lower-level protocol handling, use `ctx.request` directly.
 
 const std = @import("std");
 const Request = std.http.Server.Request;
@@ -118,6 +121,14 @@ fn funcParams(comptime T: type) []const FnParam {
 /// ```zig
 /// fn myHandler(ctx: Context, state: *MyState, data: Json(MyType)) !Response {
 ///     // Parameters automatically resolved and injected
+/// }
+///
+/// fn myHandlerManual(ctx: Context, state: *MyState) !Response {
+///     // Same extractor, but invoked manually for more explicit control.
+///     const data = Json(MyType).fromContext(ctx);
+///     _ = state;
+///     _ = data;
+///     return Response.ok(ctx.request_allocator, null, null);
 /// }
 /// ```
 pub inline fn resolveParams(

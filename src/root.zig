@@ -4,6 +4,8 @@
 //! - Keep control with application code.
 //! - Make extraction and allocation choices explicit.
 //! - Offer both automatic parameter injection and manual extraction from Context.
+//! - Let applications drop down to `ctx.request` for lower-level protocol control
+//!   when automatic extraction is not the right fit.
 //!
 //! Error behavior (important):
 //! - If a handler or middleware returns an unhandled error, Volt responds with
