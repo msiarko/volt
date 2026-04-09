@@ -29,7 +29,7 @@ const route_param = @import("route_param.zig");
 /// context inside the handler parameter tuple without importing `http`.
 fn getContextFieldName(comptime V: type) ?[]const u8 {
     inline for (@typeInfo(V).@"struct".fields) |f| {
-        if (@typeInfo(f.type) == .@"struct" and @hasDecl(f.type, "VOLT_REQUEST_CONTEXT")) {
+        if (@typeInfo(f.type) == .@"struct" and @hasDecl(f.type, "VOLT_REQUEST_CONTEXT") and @field(f.type, "VOLT_REQUEST_CONTEXT")) {
             return f.name;
         }
     }
