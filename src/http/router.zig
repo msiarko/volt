@@ -186,8 +186,8 @@ pub fn Router(comptime State: type) type {
         /// A fresh middleware instance is created for each request.
         ///
         /// Middleware must implement:
-        /// - `handle(self: *const Self, ctx: *Context, next: *const middleware.Chain.Next) !Response`
-        /// - Optional: `init(allocator: std.mem.Allocator) !Self`
+        /// - `init(ctx: *Context) !Self`
+        /// - `handle(self: *const Self, next: *const middleware.Next) !Response`
         ///
         /// Middleware may call `next.run()` to continue the chain or return a
         /// response directly to short-circuit request processing.
