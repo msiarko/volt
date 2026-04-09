@@ -13,6 +13,7 @@ A modern, type-safe web library for Zig with automatic parameter injection and W
 - 🌐 **WebSocket Support**: Seamless WebSocket upgrade handling
 - 🧰 **Request Data Extraction**: Built-in extract support for request data and protocol upgrades
 - 🛣️ **Router**: Flexible routing with HTTP method support
+- 🧩 **Middleware System**: Per-request middleware chain with explicit short-circuiting
 - ⚡ **Async**: Built-in asynchronous request handling
 - 🧠 **Memory Safe**: Request-scoped and server-scoped allocators for safer memory handling
 
@@ -28,6 +29,24 @@ Then add it to your `build.zig`:
 
 ```zig
 const volt = b.dependency("volt", .{});
+exe.root_module.addImport("volt", volt.module("volt"));
+```
+
+## Configuration
+
+Volt currently exposes one build option:
+
+- `shutdown_timeout_seconds` (`u32`, default `5`): Graceful shutdown timeout for waiting on active HTTP connection tasks before force-canceling them.
+
+Pass options through the dependency config in your `build.zig`:
+
+```zig
+const volt = b.dependency("volt", .{
+    .target = target,
+    .optimize = optimize,
+    .shutdown_timeout_seconds = 10,
+});
+
 exe.root_module.addImport("volt", volt.module("volt"));
 ```
 
@@ -56,6 +75,9 @@ fn indexHandler(ctx: volt.Context) !volt.Response {
 }
 ```
 
+For `volt.Server(void)`, handlers must omit the state parameter entirely.
+Using `*void` as a handler state parameter is rejected at compile time.
+
 ## Routing
 
 Volt provides a clean routing API with support for all HTTP methods:
@@ -76,11 +98,67 @@ Volt matches routes using the following precedence rules:
 - Parametric routes use `:name` segments, for example `/users/:id`.
 - Among parametric routes, patterns with more literal segments are matched first.
 - Duplicate parameter names in a single route pattern are rejected during registration.
+- If an exact path matches but does not support the requested method, Volt continues scanning matching parametric routes for a method match.
+- Volt returns **405 Method Not Allowed** only when at least one route pattern matches the path and none support the requested method.
+- 405 responses include an `Allow` header listing supported methods across matching route patterns.
 
 Examples:
 
 - `/users/me` is preferred over `/users/:id` for the request `/users/me`.
 - `/users/:id` is preferred over `/:entity/:id` for the request `/users/42`.
+
+## Middleware
+
+Volt supports request middleware chains with compile-time signature validation and per-request isolation.
+
+Register middleware on the router by passing the middleware type:
+
+```zig
+try server.router.use(LoggerMiddleware); // Pass type, not instance
+```
+
+Each request creates a fresh middleware instance.
+The middleware struct instance itself is request-scoped (allocated with `ctx.request_allocator` by the framework).
+`Context` lets middleware choose allocator scope for any additional internal allocations and gives access to request-scoped resources:
+- `ctx.request_allocator` — request-scoped lifetime (freed at request boundary)  
+- `ctx.server_allocator` — server-wide lifetime (freed at server shutdown)
+- `ctx.io` — I/O interface for async operations
+
+Middleware contract:
+
+- `init(ctx: *Context) !Self` — Initialize with allocator choice and store references if needed
+- `handle(self: *const Self, next: *const volt.middleware.Next) !volt.Response` — Handle request
+- `deinit(self: *Self, allocator: std.mem.Allocator) void` — Optional cleanup hook called by the framework before middleware storage is destroyed
+
+Use `next.run()` to continue the chain. Returning a `Response` without calling
+`next.run()` short-circuits request processing.
+
+For a complete real-world middleware definition, see
+[`src/middlewares/console_logger.zig`](src/middlewares/console_logger.zig).
+
+```zig
+const LoggerMiddleware = struct {
+    request_allocator: std.mem.Allocator,
+
+    pub fn init(ctx: *volt.Context) !@This() {
+        // Store what you need for handle() - in this case, the allocator
+        return .{ .request_allocator = ctx.request_allocator };
+    }
+
+    pub fn handle(
+        self: *const @This(),
+        next: *const volt.middleware.Next,
+    ) !volt.Response {
+        std.log.info("middleware called", .{});
+
+        var res = try next.run();
+
+        // Optional response adaptation can happen here.
+        _ = self;
+        return res;
+    }
+};
+```
 
 ## Automatic Parameter Injection
 
@@ -94,6 +172,16 @@ Volt automatically extracts parameters from HTTP requests using compile-time ref
 - **extract.Header("name")**: Extracts a single HTTP header by name.
 - **extract.RouteParam("name")**: Extracts a named path segment from parametric routes (e.g., `/users/:id`).
 - **extract.WebSocket**: Handles WebSocket upgrade requests and connection handoff.
+
+Ownership and lifetime:
+
+- `extract.Json(T)` and `extract.TypedQuery(T)` are owning extractors.
+- `extract.Query("name")` is conditionally owning: when the query value contains percent-encoded characters or `+`, a decoded copy is allocated with `ctx.request_allocator` and `deinit(allocator)` must be called; when the raw value needs no decoding the slice borrows directly from the request target with no allocation.
+- Each extractor call creates an independent allocation.
+- With Volt's default request arena, omitting `deinit(...)` is still memory-safe because request memory is released at request end.
+- Calling `deinit(...)` is still the explicit extractor cleanup contract and is recommended for deterministic cleanup and compatibility with non-arena request allocators.
+- Reusing the same owning extractor type in one handler results in separate allocations (no extractor-level caching).
+- `extract.Header` and `extract.RouteParam` are non-owning views over request data.
 
 ### JSON Body Parsing
 
@@ -137,6 +225,12 @@ fn handleConnection(ctx: volt.Context, state: *AppState, socket: *std.http.Serve
 
 ### Query Parameter Extraction
 
+Behavior notes:
+
+- Query values are URL-decoded (`%XX` and `+` as space). Decoding is single-pass only; double-encoded inputs are decoded once.
+- `value` is `anyerror!?[]const u8` with three states: `null` (absent/empty), `error.InvalidPercentEncoding` (malformed encoding), or a decoded `[]const u8`.
+- If decoding allocated a copy, `_owns_value` is `true` and `deinit(allocator)` should be called to release it.
+
 ```zig
 fn findUser(
     ctx: volt.Context,
@@ -144,8 +238,9 @@ fn findUser(
     user_id: volt.extract.Query("id")
 ) !volt.Response {
     _ = state;
+    defer user_id.deinit(ctx.request_allocator);
 
-    if (user_id.value) |id| {
+    if (try user_id.value) |id| {
         return volt.Response.text(ctx.request_allocator, .ok, id, null);
     }
 
@@ -184,6 +279,8 @@ Behavior notes:
 - Exact routes are checked before parametric routes.
 - Among parametric routes, more literal segments take precedence over more generic patterns.
 - Duplicate parameter names in the same route pattern are rejected at registration time.
+- Captured segments are validated as URI-encoded path segments (raw whitespace/control chars and malformed `%` escapes are rejected).
+- RouteParam keeps valid encoded values as-is (for example `hello%20world`), so handlers can choose if/when to decode.
 
 ```zig
 try server.router.get("/users/:id", &getUserById);
@@ -229,6 +326,11 @@ fn getTeamUser(
 ```
 
 ### Typed Query Extraction
+
+Behavior notes:
+
+- TypedQuery matches query parameter names directly to struct field names (encoded names are not matched).
+- TypedQuery applies single-pass URL decoding to matched values (`%XX` and `+` as space).
 
 ```zig
 const UserFilters = struct {
@@ -411,13 +513,14 @@ Volt is built around several key components:
 
 - **Server**: Generic HTTP server with async request handling
 - **Router**: Type-safe routing with automatic parameter injection
+- **Middleware**: Per-request middleware pipeline for cross-cutting concerns
 - **Context**: Request execution context with I/O and memory resources
 - **Extract**: Automatic parameter extraction (JSON, WebSocket, Query, TypedQuery, Header, RouteParam)
 - **Response**: Unified response type for HTTP and WebSocket responses
 
 ## Status & Roadmap
 
-**Current Version**: 0.0.1 (Early Development)
+**Current Version**: 0.0.5 (Early Development)
 
 **Requirements**: Nightly Zig only (0.16.0-dev or later). Stable Zig releases are not supported.
 
@@ -431,8 +534,6 @@ This is an early-stage library. While the core routing and WebSocket functionali
 - **Feature Flags**: Build-time feature flags in `build.zig` to include only selected features and reduce final binary size when unused features are disabled.
 
 - **SSL/TLS Support**: Secure HTTPS connections
-
-- **Middleware System**: Request/response middleware pipeline for cross-cutting concerns
 
 - **Enhanced Error Handling**: More comprehensive error types and better error messages
 

@@ -6,9 +6,90 @@
 
 const std = @import("std");
 const utils = @import("utils.zig");
+const Context = @import("../http/context.zig").Context;
 
-/// Key used to identify TypedQuery extractor types at compile time.
-const TYPED_QUERY_EXTRACTOR_KEY: []const u8 = "TYPED_QUERY_EXTRACTOR";
+fn freeTypedQueryFields(comptime T: type, arena: std.mem.Allocator, typed_query: *T) void {
+    inline for (@typeInfo(T).@"struct".fields) |field| {
+        if (@field(typed_query.*, field.name)) |field_value| {
+            arena.free(field_value);
+        }
+    }
+}
+
+/// Parses request query parameters into a typed struct.
+///
+/// Behavior:
+/// - Returns `.value = null` when no query string exists
+/// - Returns `.value = null` when all matched values are empty or absent
+/// - Returns `.value = typed_ptr` when at least one non-empty field matched
+/// - Returns `.value = err` on allocation failures
+/// - Query parameter names must match field names directly (encoded names are not matched)
+///
+/// Compile errors:
+/// - `Type is not a struct`: `T` is not a struct type
+/// - `<field> field must be of type ?[]const u8`: invalid field type in `T`
+/// - `<field> field name must not require URL decoding`: encoded-style names are unsupported
+fn initTypedQuery(comptime T: type, arena: std.mem.Allocator, req: *std.http.Server.Request) TypedQuery(T) {
+    const type_info = @typeInfo(T);
+    if (type_info != .@"struct") {
+        @compileError("Type is not a struct");
+    }
+
+    const fields = type_info.@"struct".fields;
+    comptime {
+        for (fields) |field| {
+            if (field.type != ?[]const u8) {
+                @compileError(field.name ++ " field must be of type ?[]const u8");
+            }
+
+            if (utils.queryComponentNeedsDecoding(field.name)) {
+                @compileError(field.name ++ " field name must not require URL decoding");
+            }
+        }
+    }
+
+    var query_it = utils.queryIterator(req.head.target) orelse return .{ .value = null };
+    const typed_query = arena.create(T) catch |err| return .{ .value = err };
+    inline for (fields) |field| {
+        @field(typed_query.*, field.name) = null;
+    }
+
+    var value_set = false;
+    while (query_it.next()) |entry| {
+        inline for (fields) |field| {
+            if (std.ascii.eqlIgnoreCase(entry.key, field.name)) {
+                if (entry.value) |raw_value| {
+                    const value = if (utils.queryComponentNeedsDecoding(raw_value))
+                        utils.decodeQueryComponent(arena, raw_value) catch |err| {
+                            freeTypedQueryFields(T, arena, typed_query);
+                            arena.destroy(typed_query);
+                            return .{ .value = err };
+                        }
+                    else
+                        arena.dupe(u8, raw_value) catch |err| {
+                            freeTypedQueryFields(T, arena, typed_query);
+                            arena.destroy(typed_query);
+                            return .{ .value = err };
+                        };
+
+                    if (@field(typed_query.*, field.name)) |previous| {
+                        arena.free(previous);
+                    }
+
+                    value_set = true;
+                    @field(typed_query.*, field.name) = value;
+                }
+            }
+        }
+    }
+
+    if (!value_set) {
+        arena.destroy(typed_query);
+        return .{ .value = null };
+    }
+
+    return .{ .value = typed_query };
+}
 
 /// Creates a TypedQuery extractor type for structured query parsing.
 ///
@@ -18,76 +99,52 @@ pub fn TypedQuery(comptime T: type) type {
     return struct {
         const Self = @This();
 
-        /// Extractor key for type identification.
-        key: []const u8 = TYPED_QUERY_EXTRACTOR_KEY,
+        /// Compile-time marker used to identify TypedQuery extractor types.
+        pub const VOLT_TYPED_QUERY_EXTRACTOR = true;
+
         /// Parsed query object, null when no non-empty keys were matched.
         value: anyerror!?*T,
 
-        /// Parses request query parameters into a typed struct.
-        ///
-        /// Behavior:
-        /// - Returns `.value = null` when no query string exists
-        /// - Returns `.value = null` when all matched values are empty or absent
-        /// - Returns `.value = typed_ptr` when at least one non-empty field matched
-        /// - Returns `.value = err` on allocation failures
-        ///
-        /// Compile errors:
-        /// - `Type is not a struct`: `T` is not a struct type
-        /// - `<field> field must be of type ?[]const u8`: invalid field type in `T`
-        pub fn init(arena: std.mem.Allocator, req: *std.http.Server.Request) Self {
-            const type_info = @typeInfo(T);
-            if (type_info != .@"struct") {
-                @compileError("Type is not a struct");
-            }
-
-            const fields = type_info.@"struct".fields;
-            comptime {
-                for (fields) |field| {
-                    if (field.type != ?[]const u8) {
-                        @compileError(field.name ++ " field must be of type ?[]const u8");
-                    }
-                }
-            }
-
-            var query_it = utils.queryIterator(req.head.target) orelse return .{ .value = null };
-            const typed_query = arena.create(T) catch |err| return .{ .value = err };
-            inline for (fields) |field| {
-                @field(typed_query.*, field.name) = null;
-            }
-
-            var value_set = false;
-            while (query_it.next()) |entry| {
-                inline for (fields) |field| {
-                    if (std.ascii.eqlIgnoreCase(entry.key, field.name)) {
-                        if (entry.value) |value| {
-                            value_set = true;
-                            @field(typed_query.*, field.name) = value;
-                        }
-                    }
-                }
-            }
-
-            if (!value_set) {
-                arena.destroy(typed_query);
-                return .{ .value = null };
-            }
-
-            return .{ .value = typed_query };
-        }
-
-        /// Releases typed query storage allocated by `init`.
+        /// Releases typed query storage.
         ///
         /// Parameters:
         /// - `self`: TypedQuery extractor instance
-        /// - `arena`: The same allocator passed to `init`
+        /// - `arena`: The allocator used for extraction
         ///
         /// This method is a no-op when extraction resulted in `null` or an error.
         /// Call this once the extracted query object is no longer needed.
         pub fn deinit(self: *Self, arena: std.mem.Allocator) void {
             const val = self.value catch return;
             if (val) |v| {
+                freeTypedQueryFields(T, arena, v);
                 arena.destroy(v);
             }
+        }
+
+        /// Extracts and parses query from request context.
+        ///
+        /// When a request context is available, use this method for manual extraction.
+        /// Each call returns a fresh owning extractor instance with independent
+        /// allocations. Call `deinit` once for each successful extraction.
+        ///
+        /// Parameters:
+        /// - `ctx`: Request context (any type with request and request_allocator fields).
+        ///   Use `ctx.io` for any I/O operations required within the surrounding handler.
+        ///
+        /// Returns: TypedQuery extractor with parsed value or null
+        ///
+        /// Example usage in a handler body:
+        /// ```zig
+        /// fn search(ctx: Context, state: *MyState) !Response {
+        ///     var query = TypedQuery(SearchParams).fromContext(ctx);
+        ///     defer query.deinit(ctx.request_allocator);
+        ///     if (try query.value) |params| {
+        ///         // Use params...
+        ///     }
+        /// }
+        /// ```
+        pub fn fromContext(ctx: Context) Self {
+            return initTypedQuery(T, ctx.request_allocator, ctx.request);
         }
     };
 }
@@ -117,12 +174,19 @@ fn Extracted(comptime T: type) type {
 /// automatic detection and instantiation of TypedQuery extractor types during parameter resolution.
 pub const Resolver = struct {
     pub fn matches(comptime T: type) bool {
-        return utils.matches(T, TYPED_QUERY_EXTRACTOR_KEY);
+        return @typeInfo(T) == .@"struct" and
+            @hasDecl(T, "VOLT_TYPED_QUERY_EXTRACTOR") and
+            @field(T, "VOLT_TYPED_QUERY_EXTRACTOR");
     }
 
     pub fn resolve(comptime T: type, allocator: std.mem.Allocator, req: *std.http.Server.Request) T {
         const ExtractedType = Extracted(T);
-        return TypedQuery(ExtractedType).init(allocator, req);
+        return initTypedQuery(ExtractedType, allocator, req);
+    }
+
+    pub fn resolveWithContext(comptime T: type, ctx: Context) T {
+        const ExtractedType = Extracted(T);
+        return TypedQuery(ExtractedType).fromContext(ctx);
     }
 };
 
@@ -169,7 +233,14 @@ test "init returns TypedQuery with values when matching parameters are present" 
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    var typed_query = TypedQuery(Filters).init(allocator, &http_req);
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request = &http_req,
+        .request_allocator = allocator,
+    };
+
+    var typed_query = TypedQuery(Filters).fromContext(test_ctx);
     defer typed_query.deinit(allocator);
 
     const filters = (try typed_query.value) orelse unreachable;
@@ -193,7 +264,14 @@ test "init returns TypedQuery with partial values when some parameters are missi
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    var typed_query = TypedQuery(Filters).init(allocator, &http_req);
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request = &http_req,
+        .request_allocator = allocator,
+    };
+
+    var typed_query = TypedQuery(Filters).fromContext(test_ctx);
     defer typed_query.deinit(allocator);
 
     const filters = (try typed_query.value) orelse unreachable;
@@ -217,7 +295,14 @@ test "init returns null when query string is missing" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    var typed_query = TypedQuery(Filters).init(allocator, &http_req);
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request = &http_req,
+        .request_allocator = allocator,
+    };
+
+    var typed_query = TypedQuery(Filters).fromContext(test_ctx);
     defer typed_query.deinit(allocator);
 
     try std.testing.expectEqual(null, try typed_query.value);
@@ -239,7 +324,14 @@ test "init returns null when query string is empty" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    var typed_query = TypedQuery(Filters).init(allocator, &http_req);
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request = &http_req,
+        .request_allocator = allocator,
+    };
+
+    var typed_query = TypedQuery(Filters).fromContext(test_ctx);
     defer typed_query.deinit(allocator);
 
     try std.testing.expectEqual(null, try typed_query.value);
@@ -261,7 +353,14 @@ test "init returns null when all matching parameters are empty" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    var typed_query = TypedQuery(Filters).init(allocator, &http_req);
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request = &http_req,
+        .request_allocator = allocator,
+    };
+
+    var typed_query = TypedQuery(Filters).fromContext(test_ctx);
     defer typed_query.deinit(allocator);
 
     try std.testing.expectEqual(null, try typed_query.value);
@@ -295,7 +394,14 @@ test "init table-driven typed query extraction" {
         var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
         var http_req = try http_server.receiveHead();
 
-        var typed_query = TypedQuery(Filters).init(std.testing.allocator, &http_req);
+        const test_ctx: Context = .{
+            .io = undefined,
+            .server_allocator = std.testing.allocator,
+            .request = &http_req,
+            .request_allocator = std.testing.allocator,
+        };
+
+        var typed_query = TypedQuery(Filters).fromContext(test_ctx);
         defer typed_query.deinit(std.testing.allocator);
 
         if (case.has_value) {
@@ -317,4 +423,168 @@ test "init table-driven typed query extraction" {
             try std.testing.expectEqual(null, try typed_query.value);
         }
     }
+}
+
+test "init decodes encoded typed query values" {
+    const Filters = struct {
+        first_name: ?[]const u8,
+        role: ?[]const u8,
+    };
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const req_bytes = std.fmt.comptimePrint("GET /users?first_name=Zig+Lang&role=platform%2Fdev HTTP/1.1\r\n\r\n", .{});
+    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+
+    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+    var http_req = try http_server.receiveHead();
+
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request = &http_req,
+        .request_allocator = arena.allocator(),
+    };
+
+    var typed_query = TypedQuery(Filters).fromContext(test_ctx);
+    defer typed_query.deinit(arena.allocator());
+
+    const filters = (try typed_query.value) orelse unreachable;
+    try std.testing.expectEqualStrings("Zig Lang", filters.first_name.?);
+    try std.testing.expectEqualStrings("platform/dev", filters.role.?);
+}
+
+test "init returns error for malformed encoded typed query value" {
+    const Filters = struct {
+        name: ?[]const u8,
+    };
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const req_bytes = std.fmt.comptimePrint("GET /users?name=Zig%2 HTTP/1.1\r\n\r\n", .{});
+    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+
+    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+    var http_req = try http_server.receiveHead();
+
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request = &http_req,
+        .request_allocator = arena.allocator(),
+    };
+
+    var typed_query = TypedQuery(Filters).fromContext(test_ctx);
+    defer typed_query.deinit(arena.allocator());
+
+    try std.testing.expectError(error.InvalidPercentEncoding, typed_query.value);
+}
+
+test "init decodes double-encoded typed query value only once" {
+    const Filters = struct {
+        name: ?[]const u8,
+    };
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const req_bytes = std.fmt.comptimePrint("GET /users?name=hello%2520world HTTP/1.1\r\n\r\n", .{});
+    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+
+    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+    var http_req = try http_server.receiveHead();
+
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request = &http_req,
+        .request_allocator = arena.allocator(),
+    };
+
+    var typed_query = TypedQuery(Filters).fromContext(test_ctx);
+    defer typed_query.deinit(arena.allocator());
+
+    const filters = (try typed_query.value) orelse unreachable;
+    try std.testing.expectEqualStrings("hello%20world", filters.name.?);
+}
+
+test "init does not match encoded typed query keys" {
+    const Filters = struct {
+        first_name: ?[]const u8,
+    };
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const req_bytes = std.fmt.comptimePrint("GET /users?first%5fname=Zig HTTP/1.1\r\n\r\n", .{});
+    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+
+    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+    var http_req = try http_server.receiveHead();
+
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request = &http_req,
+        .request_allocator = arena.allocator(),
+    };
+
+    var typed_query = TypedQuery(Filters).fromContext(test_ctx);
+    defer typed_query.deinit(arena.allocator());
+
+    try std.testing.expectEqual(null, try typed_query.value);
+}
+
+test "fromContext returns independent owning typed query instances" {
+    const Filters = struct {
+        name: ?[]const u8,
+        age: ?[]const u8,
+    };
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const req_bytes = std.fmt.comptimePrint("GET /users?name=Ziggy&age=30 HTTP/1.1\r\n\r\n", .{});
+    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
+
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
+
+    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
+    var http_req = try http_server.receiveHead();
+
+    const test_ctx: Context = .{
+        .io = undefined,
+        .server_allocator = std.testing.allocator,
+        .request = &http_req,
+        .request_allocator = arena.allocator(),
+    };
+
+    var first = TypedQuery(Filters).fromContext(test_ctx);
+    defer first.deinit(arena.allocator());
+
+    var second = TypedQuery(Filters).fromContext(test_ctx);
+    defer second.deinit(arena.allocator());
+
+    const first_filters = (try first.value) orelse unreachable;
+    const second_filters = (try second.value) orelse unreachable;
+
+    try std.testing.expect(@intFromPtr(first_filters) != @intFromPtr(second_filters));
+
+    try std.testing.expectEqualStrings("Ziggy", second_filters.name.?);
+    try std.testing.expectEqualStrings("30", second_filters.age.?);
 }
