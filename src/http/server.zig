@@ -6,7 +6,6 @@ const ListenOptions = std.Io.net.IpAddress.ListenOptions;
 const response = @import("response.zig");
 const extract = @import("../extract/root.zig");
 const utils = @import("utils.zig");
-const middleware = @import("middleware.zig");
 
 const context = @import("context.zig");
 const Context = context.Context;
@@ -166,7 +165,10 @@ pub fn Server(comptime State: type) type {
 
             var http_server = std.http.Server.init(&stream_buf_reader.interface, &stream_buf_writer.interface);
             while (true) {
-                var req = receiveRequest(&http_server) orelse break;
+                var req = http_server.receiveHead() catch |err| {
+                    std.log.err("Failed to receive head: {}", .{err});
+                    break;
+                };
 
                 var arena = std.heap.ArenaAllocator.init(self.allocator);
                 defer arena.deinit();
@@ -185,28 +187,6 @@ pub fn Server(comptime State: type) type {
             }
         }
 
-        fn receiveRequest(http_server: *std.http.Server) ?HttpRequest {
-            return http_server.receiveHead() catch |err| {
-                if (!isExpectedConnectionCloseError(err)) {
-                    std.log.err("Failed to receive head: {}", .{err});
-                }
-
-                return null;
-            };
-        }
-
-        fn isExpectedConnectionCloseError(err: anyerror) bool {
-            return switch (err) {
-                error.HttpConnectionClosing,
-                error.ReadFailed,
-                error.EndOfStream,
-                error.ConnectionResetByPeer,
-                error.BrokenPipe,
-                => true,
-                else => false,
-            };
-        }
-
         fn handleRequest(router: *const Router, ctx: Context, state: *State, req: *HttpRequest) !void {
             const target = normalizedTarget(req.head.target);
             const method = req.head.method;
@@ -216,8 +196,7 @@ pub fn Server(comptime State: type) type {
             if (router.routes.get(target)) |route_entry| {
                 path_matched = true;
                 if (route_entry.handlers.get(method)) |handler| {
-                    try executeWithMiddleware(router, handler, ctx, state, null, req);
-                    return;
+                    return executeHandler(handler, ctx, state, null, req);
                 }
 
                 collectAllowedMethods(&allowed_methods, route_entry.handlers);
@@ -227,8 +206,7 @@ pub fn Server(comptime State: type) type {
                 if (route.match(target)) {
                     path_matched = true;
                     if (route.entry.handlers.get(method)) |handler| {
-                        try executeWithMiddleware(router, handler, ctx, state, route.pattern, req);
-                        return;
+                        return executeHandler(handler, ctx, state, route.pattern, req);
                     }
                     collectAllowedMethods(&allowed_methods, route.entry.handlers);
                 }
@@ -239,6 +217,16 @@ pub fn Server(comptime State: type) type {
             }
 
             return respondNotFound(req);
+        }
+
+        fn executeHandler(handler: Router.Handler, ctx: Context, state: *State, pattern: ?[]const u8, req: *HttpRequest) !void {
+            const res = handler.execute(ctx, state, pattern, req) catch |err| {
+                if (utils.isMemberOfErrorSet(extract.WebSocketError, err)) return;
+                try req.respond(@errorName(err), .{ .status = .internal_server_error });
+                return;
+            };
+
+            try response.respond(req, res);
         }
 
         fn normalizedTarget(target: []const u8) []const u8 {
@@ -290,62 +278,6 @@ pub fn Server(comptime State: type) type {
                 .status = .method_not_allowed,
                 .extra_headers = &extra_headers,
             });
-        }
-
-        fn executeWithMiddleware(
-            router: *const Router,
-            handler: anytype,
-            ctx: Context,
-            state: *State,
-            route_pattern: ?[]const u8,
-            req: *HttpRequest,
-        ) !void {
-            if (router.middleware_factories.items.len == 0) {
-                const res = handler.execute(ctx, state, route_pattern, req) catch |err| {
-                    if (utils.isMemberOfErrorSet(extract.WebSocketError, err)) return;
-                    try req.respond(@errorName(err), .{ .status = .internal_server_error });
-                    return;
-                };
-
-                try response.respond(req, res);
-                return;
-            }
-
-            var middleware_ctx = ctx;
-            var chain = try middleware.Chain.initFromFactories(&middleware_ctx, router.middleware_factories.items);
-            defer chain.deinit();
-
-            const Terminal = struct {
-                handler: @TypeOf(handler),
-                ctx: *Context,
-                state: *State,
-                route_pattern: ?[]const u8,
-                req: *HttpRequest,
-
-                fn call(ptr: *const anyopaque) anyerror!Response {
-                    const self: *const @This() = @ptrCast(@alignCast(ptr));
-                    return self.handler.execute(self.ctx.*, self.state, self.route_pattern, self.req);
-                }
-            };
-
-            const terminal = Terminal{
-                .handler = handler,
-                .ctx = &middleware_ctx,
-                .state = state,
-                .route_pattern = route_pattern,
-                .req = req,
-            };
-
-            const res = chain.run(&middleware_ctx, .{
-                .ptr = &terminal,
-                .call = Terminal.call,
-            }) catch |err| {
-                if (utils.isMemberOfErrorSet(extract.WebSocketError, err)) return;
-                try req.respond(@errorName(err), .{ .status = .internal_server_error });
-                return;
-            };
-
-            try response.respond(req, res);
         }
     };
 }
@@ -777,233 +709,4 @@ test "router duplicates route path keys on registration" {
 
     const output = write_buffer[0..stream_buf_writer.end];
     try std.testing.expect(std.mem.find(u8, output, "owned") != null);
-}
-
-test "middleware chain wraps next in order" {
-    // This test verifies that the middleware chain executes correctly and reaches the handler.
-    // Full order verification (entry/exit of each middleware) would require passing mutable
-    // shared state to middleware, which the current architecture doesn't support. Middleware
-    // receive only Context, and capturing mutable test-scope variables in nested struct
-    // functions is not allowed in Zig.
-    // To fully verify order, one could:
-    // 1. Pass state reference through a context field (requires Context modification)
-    // 2. Use request_allocator to store shared mutable data
-    // 3. Implement middleware that return distinct responses based on execution order
-
-    const State = struct {
-        handler_called: bool = false,
-    };
-
-    const TestRouter = ServerRouter(State);
-    const TestServer = Server(State);
-
-    var router: TestRouter = .init(std.testing.allocator);
-    defer router.deinit();
-
-    var test_state: State = .{};
-
-    const First = struct {
-        pub fn init(ctx: *Context) !@This() {
-            _ = ctx;
-            return .{};
-        }
-
-        pub fn handle(self: *const @This(), next: *const middleware.Next) !Response {
-            _ = self;
-            const res = try next.run();
-            return res;
-        }
-    };
-
-    const Second = struct {
-        pub fn init(ctx: *Context) !@This() {
-            _ = ctx;
-            return .{};
-        }
-
-        pub fn handle(self: *const @This(), next: *const middleware.Next) !Response {
-            _ = self;
-            const res = try next.run();
-            return res;
-        }
-    };
-
-    const Third = struct {
-        pub fn init(ctx: *Context) !@This() {
-            _ = ctx;
-            return .{};
-        }
-
-        pub fn handle(self: *const @This(), next: *const middleware.Next) !Response {
-            _ = self;
-            const res = try next.run();
-            return res;
-        }
-    };
-
-    const handlers = struct {
-        fn index(ctx: Context, state: *State) !Response {
-            state.handler_called = true;
-            return Response.text(ctx.request_allocator, .ok, "ok", null);
-        }
-    };
-
-    try router.use(First);
-    try router.use(Second);
-    try router.use(Third);
-    try router.get("/", &handlers.index);
-
-    const req_bytes = "GET / HTTP/1.1\r\n\r\n";
-    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
-    var write_buffer: [4096]u8 = undefined;
-    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
-    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
-    var req = try http_server.receiveHead();
-
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    const ctx: Context = .{
-        .io = undefined,
-        .request_allocator = arena.allocator(),
-        .request = &req,
-    };
-
-    try TestServer.handleRequest(&router, ctx, &test_state, &req);
-    try stream_buf_writer.flush();
-
-    // Verify middleware chain executed: handler should be called
-    try std.testing.expect(test_state.handler_called);
-
-    // Verify response was sent
-    const output = write_buffer[0..stream_buf_writer.end];
-    try std.testing.expect(std.mem.find(u8, output, "ok") != null);
-}
-
-test "middleware can short-circuit and skip handler" {
-    const State = struct {
-        handler_called: bool = false,
-    };
-
-    const TestRouter = ServerRouter(State);
-    const TestServer = Server(State);
-
-    var router: TestRouter = .init(std.testing.allocator);
-    defer router.deinit();
-
-    const Blocker = struct {
-        ctx: *Context,
-
-        pub fn init(ctx: *Context) !@This() {
-            return .{ .ctx = ctx };
-        }
-
-        pub fn handle(self: *const @This(), _: *const middleware.Next) !Response {
-            return Response.text(self.ctx.request_allocator, .forbidden, "blocked", null);
-        }
-    };
-
-    const handlers = struct {
-        fn index(ctx: Context, state: *State) !Response {
-            state.handler_called = true;
-            return Response.text(ctx.request_allocator, .ok, "ok", null);
-        }
-    };
-
-    try router.use(Blocker);
-    try router.get("/", &handlers.index);
-
-    const req_bytes = "GET / HTTP/1.1\r\n\r\n";
-    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
-    var write_buffer: [4096]u8 = undefined;
-    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
-    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
-    var req = try http_server.receiveHead();
-
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    var state: State = .{};
-    const ctx: Context = .{
-        .io = undefined,
-        .request_allocator = arena.allocator(),
-        .request = &req,
-    };
-
-    try TestServer.handleRequest(&router, ctx, &state, &req);
-    try stream_buf_writer.flush();
-
-    const output = write_buffer[0..stream_buf_writer.end];
-    try std.testing.expect(std.mem.find(u8, output, "blocked") != null);
-    try std.testing.expect(!state.handler_called);
-}
-
-test "websocket upgrade requests run shared middleware chain" {
-    const State = struct {};
-
-    const TestRouter = ServerRouter(State);
-    const TestServer = Server(State);
-
-    var router: TestRouter = .init(std.testing.allocator);
-    defer router.deinit();
-
-    const SharedMiddleware = struct {
-        pub fn init(ctx: *Context) !@This() {
-            _ = ctx;
-            return .{};
-        }
-
-        pub fn handle(self: *const @This(), next: *const middleware.Next) !Response {
-            _ = self;
-            return next.run();
-        }
-    };
-
-    const NullWebSocketHandler = struct {
-        fn noop(socket: *std.http.Server.WebSocket) !void {
-            _ = socket;
-        }
-    };
-
-    const handlers = struct {
-        fn websocket_upgrade(_: Context, ws: extract.WebSocket) !Response {
-            try ws.onConnected(NullWebSocketHandler.noop, .{});
-            return .{ .web_socket = ws };
-        }
-    };
-
-    try router.use(SharedMiddleware);
-    try router.get("/", &handlers.websocket_upgrade);
-
-    const req_bytes =
-        "GET / HTTP/1.1\r\n" ++
-        "Connection: Upgrade\r\n" ++
-        "Upgrade: websocket\r\n" ++
-        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" ++
-        "Sec-WebSocket-Version: 13\r\n" ++
-        "\r\n";
-    var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
-    var write_buffer: [4096]u8 = undefined;
-    var stream_buf_writer = std.Io.Writer.fixed(&write_buffer);
-    var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
-    var req = try http_server.receiveHead();
-
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    var state: State = .{};
-    const ctx: Context = .{
-        .io = undefined,
-        .request_allocator = arena.allocator(),
-        .request = &req,
-    };
-
-    try TestServer.handleRequest(&router, ctx, &state, &req);
-    try stream_buf_writer.flush();
-
-    const output = write_buffer[0..stream_buf_writer.end];
-    // Verify WebSocket upgrade response (should contain 101 Switching Protocols or Sec-WebSocket-Accept header)
-    // This confirms the middleware chain allowed the WebSocket upgrade to proceed
-    try std.testing.expect(std.mem.find(u8, output, "101") != null or
-        std.mem.find(u8, output, "Sec-WebSocket-Accept") != null);
 }

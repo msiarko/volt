@@ -13,7 +13,6 @@ A modern, type-safe web library for Zig with automatic parameter injection and W
 - 🌐 **WebSocket Support**: Seamless WebSocket upgrade handling
 - 🧰 **Request Data Extraction**: Built-in extract support for request data and protocol upgrades
 - 🛣️ **Router**: Flexible routing with HTTP method support
-- 🧩 **Middleware System**: Per-request middleware chain with explicit short-circuiting
 - ⚡ **Async**: Built-in asynchronous request handling
 - 🧠 **Memory Safe**: Request-scoped allocator in handlers, with explicit app-state allocation strategy
 
@@ -88,60 +87,6 @@ Examples:
 
 - `/users/me` is preferred over `/users/:id` for the request `/users/me`.
 - `/users/:id` is preferred over `/:entity/:id` for the request `/users/42`.
-
-## Middleware
-
-Volt supports request middleware chains with compile-time signature validation and per-request isolation.
-
-Register middleware on the router by passing the middleware type:
-
-```zig
-try server.router.use(LoggerMiddleware); // Pass type, not instance
-```
-
-Each request creates a fresh middleware instance.
-The middleware struct instance itself is request-scoped (allocated with `ctx.request_allocator` by the framework).
-`Context` lets middleware choose allocator scope for any additional internal allocations and gives access to request-scoped resources:
-- `ctx.request_allocator` — request-scoped lifetime (freed at request boundary)  
-- `ctx.io` — I/O interface for async operations
-
-For long-lived middleware/application allocations, keep an allocator inside your app state and clean it up explicitly when the server shuts down.
-
-Middleware contract:
-
-- `init(ctx: *Context) !Self` — Initialize with allocator choice and store references if needed
-- `handle(self: *const Self, next: *const volt.middleware.Next) !volt.Response` — Handle request
-- `deinit(self: *Self, allocator: std.mem.Allocator) void` — Optional cleanup hook called by the framework before middleware storage is destroyed
-
-Use `next.run()` to continue the chain. Returning a `Response` without calling
-`next.run()` short-circuits request processing.
-
-For a complete real-world middleware definition, see
-[`src/middlewares/console_logger.zig`](src/middlewares/console_logger.zig).
-
-```zig
-const LoggerMiddleware = struct {
-    request_allocator: std.mem.Allocator,
-
-    pub fn init(ctx: *volt.Context) !@This() {
-        // Store what you need for handle() - in this case, the allocator
-        return .{ .request_allocator = ctx.request_allocator };
-    }
-
-    pub fn handle(
-        self: *const @This(),
-        next: *const volt.middleware.Next,
-    ) !volt.Response {
-        std.log.info("middleware called", .{});
-
-        var res = try next.run();
-
-        // Optional response adaptation can happen here.
-        _ = self;
-        return res;
-    }
-};
-```
 
 ## Automatic Parameter Injection
 
@@ -550,7 +495,6 @@ Volt is built around several key components:
 
 - **Server**: Generic HTTP server with async request handling
 - **Router**: Type-safe routing with automatic parameter injection
-- **Middleware**: Per-request middleware pipeline for cross-cutting concerns
 - **Context**: Request execution context with I/O and memory resources
 - **Extract**: Automatic parameter extraction (JSON, WebSocket, Query, TypedQuery, Header, RouteParam)
 - **Response**: Unified response type for HTTP and WebSocket responses

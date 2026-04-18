@@ -10,7 +10,7 @@ const Request = std.http.Server.Request;
 ///
 /// Request-scoped data is freed automatically at the end of each request.
 ///
-/// **I/O:** Request/connection I/O within handlers and middleware must use
+/// **I/O:** Request/connection I/O within handlers must use
 /// `ctx.io` rather than obtaining a separate I/O handle. This ensures correct
 /// participation in the async event loop and proper cancellation support.
 /// Diagnostic logging may use `std.log`.

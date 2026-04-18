@@ -181,7 +181,7 @@ const HttpResponse = struct {
 /// HttpResponse.into_response method.
 ///
 /// Note:
-/// - When a handler/middleware error is not handled by application code,
+/// - When a handler error is not handled by application code,
 ///   server-level fallback sends HTTP 500 with `@errorName(err)` as body.
 ///   See server execution path for that behavior.
 ///

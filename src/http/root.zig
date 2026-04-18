@@ -7,12 +7,10 @@ test {
     const server = @import("server.zig");
     const utils = @import("utils.zig");
     const router = @import("router.zig");
-    const middleware = @import("middleware.zig");
 
     _ = testing.refAllDecls(server);
     _ = testing.refAllDecls(Context);
     _ = testing.refAllDecls(Response);
     _ = testing.refAllDecls(utils);
     _ = testing.refAllDecls(router);
-    _ = testing.refAllDecls(middleware);
 }
