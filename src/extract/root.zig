@@ -9,6 +9,7 @@ const query = @import("query.zig");
 const typed_query = @import("typed_query.zig");
 const header = @import("header.zig");
 const route_param = @import("route_param.zig");
+const form = @import("form.zig");
 
 pub const Json = json.Json;
 pub const WebSocket = web_socket.WebSocket;
@@ -158,4 +159,5 @@ test {
     _ = std.testing.refAllDecls(typed_query);
     _ = std.testing.refAllDecls(route_param);
     _ = std.testing.refAllDecls(header);
+    _ = std.testing.refAllDecls(form);
 }

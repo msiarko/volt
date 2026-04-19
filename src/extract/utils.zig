@@ -121,6 +121,16 @@ pub fn decodeQueryComponent(allocator: Allocator, component: []const u8) Decodin
     return decodeQueryComponentAssumeNeeded(allocator, component);
 }
 
+pub fn parse(comptime T: type, val: []const u8) !T {
+    const i = @typeInfo(T);
+    return switch (i) {
+        .float => try std.fmt.parseFloat(T, val),
+        .int => try std.fmt.parseInt(T, val, 10),
+        .@"enum" => std.meta.stringToEnum(T, val) orelse return error.InvalidEnumValue,
+        else => val,
+    };
+}
+
 pub const TestExtractor = struct {
     const Self = @This();
 
