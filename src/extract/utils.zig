@@ -121,12 +121,15 @@ pub fn decodeQueryComponent(allocator: Allocator, component: []const u8) Decodin
     return decodeQueryComponentAssumeNeeded(allocator, component);
 }
 
+pub const StringToEnumError = error{InvalidEnumValue};
+pub const ParseError = StringToEnumError || std.fmt.ParseIntError || std.fmt.ParseFloatError;
+
 pub fn parse(comptime T: type, val: []const u8) !T {
     const i = @typeInfo(T);
     return switch (i) {
         .float => try std.fmt.parseFloat(T, val),
         .int => try std.fmt.parseInt(T, val, 10),
-        .@"enum" => std.meta.stringToEnum(T, val) orelse return error.InvalidEnumValue,
+        .@"enum" => std.meta.stringToEnum(T, val) orelse return StringToEnumError.InvalidEnumValue,
         else => val,
     };
 }

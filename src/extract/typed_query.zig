@@ -9,6 +9,8 @@ const QueryError = @import("query.zig").QueryError;
 
 const EXTRACTOR_ID: []const u8 = "VOLT_TYPED_QUERY_EXTRACTOR";
 
+const TypedQueryError = QueryError || utils.ParseError;
+
 fn assert(comptime T: type) void {
     const type_info = @typeInfo(T);
     if (type_info != .@"struct") {
@@ -16,8 +18,8 @@ fn assert(comptime T: type) void {
     }
 
     inline for (std.meta.fields(T)) |field| {
-        if (field.type != ?[]const u8) {
-            @compileError(field.name ++ " field must be of type ?[]const u8");
+        if (@typeInfo(field.type) != .optional) {
+            @compileError(field.name ++ " field must be of type optional");
         }
 
         if (utils.queryComponentNeedsDecoding(field.name)) {
@@ -26,13 +28,14 @@ fn assert(comptime T: type) void {
     }
 }
 
-fn extract(comptime T: type, arena: Allocator, req: *Request) QueryError!?*T {
+fn extract(comptime T: type, arena: Allocator, req: *Request) TypedQueryError!?*T {
     var query_it = utils.queryIterator(req.head.target) orelse return null;
-    const typed_query = try arena.create(T);
+    var typed_query = try arena.create(T);
+    errdefer arena.destroy(typed_query);
 
     const fields = std.meta.fields(T);
     inline for (fields) |field| {
-        @field(typed_query.*, field.name) = null;
+        @field(typed_query, field.name) = null;
     }
 
     while (query_it.next()) |entry| {
@@ -44,7 +47,8 @@ fn extract(comptime T: type, arena: Allocator, req: *Request) QueryError!?*T {
                     else
                         try arena.dupe(u8, raw_value);
 
-                    @field(typed_query.*, field.name) = value;
+                    const field_type = @typeInfo(field.type).optional.child;
+                    @field(typed_query, field.name) = try utils.parse(field_type, value);
                 }
             }
         }
@@ -55,7 +59,7 @@ fn extract(comptime T: type, arena: Allocator, req: *Request) QueryError!?*T {
 
 /// Creates a `TypedQuery` extractor type.
 ///
-/// `T` must be a struct where every field is `?[]const u8`.
+/// `T` must be a struct where every field is optional.
 /// Field names are matched case-insensitively against query keys.
 ///
 /// The resulting extractor struct contains:
@@ -75,7 +79,7 @@ fn extract(comptime T: type, arena: Allocator, req: *Request) QueryError!?*T {
 /// ```zig
 /// const Filter = struct {
 ///     name: ?[]const u8,
-///     age: ?[]const u8,
+///     age: ?u8,
 /// };
 ///
 /// fn handleRequest(ctx: Context, filter: TypedQuery(Filter)) !Response {
@@ -95,9 +99,9 @@ pub fn TypedQuery(comptime T: type) type {
         pub const ID: []const u8 = EXTRACTOR_ID;
         pub const PAYLOAD_TYPE: type = T;
 
-        result: QueryError!?*T,
+        result: TypedQueryError!?*T,
 
-        pub fn init(ctx: Context) QueryError!?*T {
+        pub fn init(ctx: Context) TypedQueryError!?*T {
             return try extract(T, ctx.request_allocator, ctx.request);
         }
     };
@@ -153,7 +157,7 @@ test "TypedQuery.init returns null when no query string is present" {
 test "TypedQuery.init maps fields from query parameters" {
     const Filter = struct {
         name: ?[]const u8,
-        age: ?[]const u8,
+        age: ?u8,
     };
 
     const req_bytes = "GET /search?name=alice&age=30 HTTP/1.1\r\n\r\n";
@@ -178,7 +182,7 @@ test "TypedQuery.init maps fields from query parameters" {
     const typed = try TypedQuery(Filter).init(test_ctx);
     try testing.expect(typed != null);
     try testing.expectEqualStrings("alice", typed.?.name.?);
-    try testing.expectEqualStrings("30", typed.?.age.?);
+    try testing.expectEqual(30, typed.?.age.?);
 }
 
 test "TypedQuery.init decodes plus and percent-escapes when needed" {
