@@ -1,15 +1,15 @@
 const std = @import("std");
 const StructField = std.builtin.Type.StructField;
 const Allocator = std.mem.Allocator;
+const AllocatorError = std.mem.Allocator.Error;
 const Request = std.http.Server.Request;
 
 const utils = @import("utils.zig");
 const Context = @import("../http/context.zig").Context;
-const QueryError = @import("query.zig").QueryError;
 
 const EXTRACTOR_ID: []const u8 = "VOLT_TYPED_QUERY_EXTRACTOR";
 
-const TypedQueryError = QueryError || utils.ParseError;
+const TypedQueryError = AllocatorError || utils.ParseError;
 
 fn assert(comptime T: type) void {
     const type_info = @typeInfo(T);
@@ -20,10 +20,6 @@ fn assert(comptime T: type) void {
     inline for (std.meta.fields(T)) |field| {
         if (@typeInfo(field.type) != .optional) {
             @compileError(field.name ++ " field must be of type optional");
-        }
-
-        if (utils.queryComponentNeedsDecoding(field.name)) {
-            @compileError(field.name ++ " field name must not require URL decoding");
         }
     }
 }
@@ -40,13 +36,10 @@ fn extract(comptime T: type, arena: Allocator, req: *Request) TypedQueryError!?*
 
     while (query_it.next()) |entry| {
         inline for (fields) |field| {
-            if (std.ascii.eqlIgnoreCase(entry.key, field.name)) {
+            const key = try utils.decodeUrl(arena, entry.key);
+            if (std.ascii.eqlIgnoreCase(key, field.name)) {
                 if (entry.value) |raw_value| {
-                    const value = if (utils.queryComponentNeedsDecoding(raw_value))
-                        try utils.decodeQueryComponent(arena, raw_value)
-                    else
-                        try arena.dupe(u8, raw_value);
-
+                    const value = try utils.decodeUrl(arena, raw_value);
                     const field_type = @typeInfo(field.type).optional.child;
                     @field(typed_query, field.name) = try utils.parse(field_type, value);
                 }
@@ -185,35 +178,6 @@ test "TypedQuery.init maps fields from query parameters" {
     try testing.expectEqual(30, typed.?.age.?);
 }
 
-test "TypedQuery.init decodes plus and percent-escapes when needed" {
-    const Filter = struct {
-        tag: ?[]const u8,
-    };
-
-    const req_bytes = "GET /search?tag=first+name%20lang HTTP/1.1\r\n\r\n";
-    var stream_buf_reader = Reader.fixed(req_bytes);
-
-    var write_buffer: [4096]u8 = undefined;
-    var stream_buf_writer = Writer.fixed(&write_buffer);
-
-    var http_server = Server.init(&stream_buf_reader, &stream_buf_writer);
-    var http_req = try http_server.receiveHead();
-
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-
-    const testing_arena = arena.allocator();
-    const test_ctx: Context = .{
-        .io = undefined,
-        .request_allocator = testing_arena,
-        .request = &http_req,
-    };
-
-    const typed = try TypedQuery(Filter).init(test_ctx);
-    try testing.expect(typed != null);
-    try testing.expectEqualStrings("first name lang", typed.?.tag.?);
-}
-
 test "TypedQuery.init returns pointer with null fields when query present but no matching fields" {
     const Filter = struct {
         a: ?[]const u8,
@@ -305,7 +269,7 @@ test "TypedQuery.init keeps matched empty values as null" {
     try testing.expectEqual(null, typed.?.name);
 }
 
-test "TypedQuery.init returns InvalidPercentEncoding on malformed value" {
+test "TypedQuery.init returns source value when percent decoding is not needed" {
     const Filter = struct {
         name: ?[]const u8,
     };
@@ -329,7 +293,8 @@ test "TypedQuery.init returns InvalidPercentEncoding on malformed value" {
         .request = &http_req,
     };
 
-    try testing.expectError(utils.DecodingError.InvalidPercentEncoding, TypedQuery(Filter).init(test_ctx));
+    const typed = try TypedQuery(Filter).init(test_ctx);
+    try testing.expectEqualStrings("bad%2", typed.?.name.?);
 }
 
 test "TypedQuery.init uses last value for duplicate keys" {

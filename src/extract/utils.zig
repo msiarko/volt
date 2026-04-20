@@ -2,15 +2,6 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const AllocatorError = std.mem.Allocator.Error;
 
-fn decodeHexNibble(c: u8) ?u8 {
-    return switch (c) {
-        '0'...'9' => c - '0',
-        'a'...'f' => 10 + (c - 'a'),
-        'A'...'F' => 10 + (c - 'A'),
-        else => null,
-    };
-}
-
 pub const QueryEntry = struct {
     key: []const u8,
     value: ?[]const u8,
@@ -42,89 +33,31 @@ pub fn queryIterator(target: []const u8) ?QueryIterator {
     return .{ .parts = std.mem.splitScalar(u8, target[start_idx..], '&') };
 }
 
-pub fn queryComponentNeedsDecoding(component: []const u8) bool {
-    for (component) |c| {
-        if (c == '%' or c == '+') return true;
+fn hasEncodedCharacters(component: []const u8) bool {
+    if (std.mem.findScalar(u8, component, '%')) |idx| {
+        if (idx + 2 > component.len - 1) {
+            return false;
+        }
+
+        const hex1 = component[idx + 1];
+        const hex2 = component[idx + 2];
+        return std.ascii.isHex(hex1) and std.ascii.isHex(hex2);
     }
+
     return false;
 }
 
-pub const DecodingError = AllocatorError || error{InvalidPercentEncoding};
-
-pub fn queryComponentEqualsAsciiIgnoreCaseDecoded(component: []const u8, expected: []const u8) bool {
-    var i: usize = 0;
-    var j: usize = 0;
-
-    while (i < component.len) {
-        const decoded = blk: {
-            const c = component[i];
-            if (c == '+') {
-                i += 1;
-                break :blk ' ';
-            }
-
-            if (c == '%') {
-                if (i + 2 >= component.len) return false;
-                const hi = decodeHexNibble(component[i + 1]) orelse return false;
-                const lo = decodeHexNibble(component[i + 2]) orelse return false;
-                i += 3;
-                break :blk (hi << 4) | lo;
-            }
-
-            i += 1;
-            break :blk c;
-        };
-
-        if (j >= expected.len) return false;
-        if (std.ascii.toLower(decoded) != std.ascii.toLower(expected[j])) return false;
-        j += 1;
-    }
-
-    return j == expected.len;
-}
-
-pub fn decodeQueryComponentAssumeNeeded(allocator: Allocator, component: []const u8) DecodingError![]const u8 {
-    const out = try allocator.alloc(u8, component.len);
-    errdefer allocator.free(out);
-
-    var i: usize = 0;
-    var out_i: usize = 0;
-    while (i < component.len) {
-        const c = component[i];
-        if (c == '+') {
-            out[out_i] = ' ';
-            out_i += 1;
-            i += 1;
-            continue;
-        }
-
-        if (c == '%') {
-            if (i + 2 >= component.len) return DecodingError.InvalidPercentEncoding;
-            const hi = decodeHexNibble(component[i + 1]) orelse return DecodingError.InvalidPercentEncoding;
-            const lo = decodeHexNibble(component[i + 2]) orelse return DecodingError.InvalidPercentEncoding;
-            out[out_i] = (hi << 4) | lo;
-            out_i += 1;
-            i += 3;
-            continue;
-        }
-
-        out[out_i] = c;
-        out_i += 1;
-        i += 1;
-    }
-
-    return allocator.realloc(out, out_i);
-}
-
-pub fn decodeQueryComponent(allocator: Allocator, component: []const u8) DecodingError![]const u8 {
-    if (!queryComponentNeedsDecoding(component)) return component;
-    return decodeQueryComponentAssumeNeeded(allocator, component);
+pub fn decodeUrl(arena: Allocator, component: []const u8) AllocatorError![]const u8 {
+    if (!hasEncodedCharacters(component)) return component;
+    const decoded = try arena.alloc(u8, component.len);
+    @memcpy(decoded, component);
+    return std.Uri.percentDecodeInPlace(decoded);
 }
 
 pub const StringToEnumError = error{InvalidEnumValue};
 pub const ParseError = StringToEnumError || std.fmt.ParseIntError || std.fmt.ParseFloatError;
 
-pub fn parse(comptime T: type, val: []const u8) !T {
+pub fn parse(comptime T: type, val: []const u8) ParseError!T {
     const i = @typeInfo(T);
     return switch (i) {
         .float => try std.fmt.parseFloat(T, val),
@@ -159,7 +92,6 @@ test "queryIterator yields key value pairs" {
     const second = it.next() orelse unreachable;
     try testing.expectEqualStrings("role", second.key);
     try testing.expectEqualStrings("admin", second.value.?);
-
     try testing.expectEqual(null, it.next());
 }
 
@@ -171,54 +103,43 @@ test "queryIterator returns null for trailing question mark" {
     try testing.expectEqual(null, queryIterator("/users?"));
 }
 
-test "queryComponentNeedsDecoding detects markers" {
-    try testing.expect(queryComponentNeedsDecoding("a+b"));
-    try testing.expect(queryComponentNeedsDecoding("a%20b"));
-    try testing.expect(!queryComponentNeedsDecoding("abc"));
+test "hasEncodedCharacters detects markers" {
+    try testing.expect(!hasEncodedCharacters("abc"));
+    try testing.expect(hasEncodedCharacters("a%20b"));
 }
 
-test "decodeQueryComponent decodes percent escapes and plus" {
+test "decodeUrl fails on malformed percent escape" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const decoded = try decodeQueryComponent(arena.allocator(), "first+name%3Dzig%20lang");
-    try testing.expectEqualStrings("first name=zig lang", decoded);
+    try testing.expectEqualStrings("bad%2", try decodeUrl(arena.allocator(), "bad%2"));
 }
 
-test "decodeQueryComponent fails on malformed percent escape" {
+test "decodeUrl returns source slice on non-hex percent escape" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    try testing.expectError(error.InvalidPercentEncoding, decodeQueryComponent(arena.allocator(), "bad%2"));
+    const source = "bad%G0";
+    const decoded = try decodeUrl(arena.allocator(), source);
+
+    try testing.expectEqual(@intFromPtr(source.ptr), @intFromPtr(decoded.ptr));
+    try testing.expectEqualStrings("bad%G0", decoded);
 }
 
-test "decodeQueryComponent fails on non-hex percent escape" {
+test "decodeUrl returns allocation-sized slice" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    try testing.expectError(error.InvalidPercentEncoding, decodeQueryComponent(arena.allocator(), "bad%G0"));
-}
+    const source = "a%20b";
+    const decoded = try decodeUrl(arena.allocator(), source);
 
-test "decodeQueryComponent returns allocation-sized slice" {
-    const decoded = try decodeQueryComponent(testing.allocator, "a%20b");
-    defer testing.allocator.free(decoded);
-
+    try testing.expect(@intFromPtr(decoded.ptr) != @intFromPtr(source.ptr));
     try testing.expectEqualStrings("a b", decoded);
 }
 
-test "decodeQueryComponent returns borrowed slice when decoding is not needed" {
+test "decodeUrl returns borrowed slice when decoding is not needed" {
     const source = "plain";
-    const decoded = try decodeQueryComponent(testing.allocator, source);
+    const decoded = try decodeUrl(testing.allocator, source);
     try testing.expectEqual(@intFromPtr(source.ptr), @intFromPtr(decoded.ptr));
     try testing.expectEqual(source.len, decoded.len);
-}
-
-test "queryComponentEqualsAsciiIgnoreCaseDecoded matches encoded key" {
-    try testing.expect(queryComponentEqualsAsciiIgnoreCaseDecoded("first%20name", "first name"));
-    try testing.expect(queryComponentEqualsAsciiIgnoreCaseDecoded("X-REQUEST-ID", "x-request-id"));
-    try testing.expect(!queryComponentEqualsAsciiIgnoreCaseDecoded("first%2", "first "));
-}
-
-test "queryComponentEqualsAsciiIgnoreCaseDecoded fails when decoded key is longer than expected" {
-    try testing.expect(!queryComponentEqualsAsciiIgnoreCaseDecoded("abc", "ab"));
 }

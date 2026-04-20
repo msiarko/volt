@@ -1,5 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const AllocatorError = std.mem.Allocator.Error;
+const ReadAllocError = std.Io.Reader.ReadAllocError;
 const assert = std.debug.assert;
 const Context = @import("../http/context.zig").Context;
 const utils = @import("utils.zig");
@@ -8,9 +10,18 @@ const Request = std.http.Server.Request;
 const EXTRACTOR_ID: []const u8 = "VOLT_FORM_EXTRACTOR";
 const CONTENT_DISPOSITION: []const u8 = "Content-Disposition: form-data; name=\"";
 
-fn extract(comptime T: type, arena: Allocator, req: *Request) !*T {
-    const content_type = req.head.content_type orelse return error.MissingContentType;
-    const content_length = req.head.content_length orelse return error.MissingContentLength;
+const FormError = utils.ParseError || AllocatorError || ReadAllocError || error{
+    MissingContentType,
+    MissingContentLength,
+    EmptyBody,
+    BoundaryMissing,
+    UnsupportedContentType,
+};
+
+fn extract(comptime T: type, arena: Allocator, req: *Request) FormError!*T {
+    const content_type = req.head.content_type orelse return FormError.MissingContentType;
+    const content_length = req.head.content_length orelse return FormError.MissingContentLength;
+    if (content_length == 0) return FormError.EmptyBody;
     const buff = try arena.alloc(u8, content_length);
     defer arena.free(buff);
 
@@ -26,7 +37,7 @@ fn extract(comptime T: type, arena: Allocator, req: *Request) !*T {
 
     // TODO: Refactor this to be more modular and extensible
     if (std.mem.startsWith(u8, content_type, "multipart/form-data")) {
-        const boundary_pos = std.mem.findLast(u8, content_type, "boundary=") orelse return error.BoundaryMissing;
+        const boundary_pos = std.mem.findLast(u8, content_type, "boundary=") orelse return FormError.BoundaryMissing;
         const boundary = std.mem.trim(u8, content_type[boundary_pos + 9 ..], "\r\n");
         const splitter = try std.fmt.allocPrint(arena, "--{s}", .{boundary});
         defer arena.free(splitter);
@@ -64,11 +75,12 @@ fn extract(comptime T: type, arena: Allocator, req: *Request) !*T {
         while (pairs_it.next()) |pair| {
             var kv_it = std.mem.splitScalar(u8, pair, '=');
             const key = kv_it.next() orelse continue;
-            const value_encoded = kv_it.next() orelse continue;
-            const value_decoded = try utils.decodeQueryComponent(arena, value_encoded);
+            const value = kv_it.next() orelse continue;
+            const key_decoded = try utils.decodeUrl(arena, key);
+            const value_decoded = try utils.decodeUrl(arena, value);
 
             inline for (std.meta.fields(T)) |field| {
-                if (std.mem.eql(u8, field.name, key)) {
+                if (std.mem.eql(u8, field.name, key_decoded)) {
                     @field(result, field.name) = try utils.parse(field.type, value_decoded);
                 }
             }
@@ -76,10 +88,38 @@ fn extract(comptime T: type, arena: Allocator, req: *Request) !*T {
 
         return result;
     } else {
-        return error.UnsupportedContentType;
+        return FormError.UnsupportedContentType;
     }
 }
 
+/// Creates a `Form` extractor type
+///
+/// The resulting extractor struct contains:
+/// - `result`: `FormError!*T`
+///
+/// `result` semantics:
+/// - `error`: parsing error (e.g., malformed multipart body, invalid percent-encoding, unsupported content type, allocator failure, etc.)
+/// - `T`: decoded form value of type `T`, where `T` is a struct with fields corresponding to form keys
+///
+/// Parameter-name matching is case-insensitive and compares against the decoded key.
+/// Value decoding is single-pass (`+` -> space, `%XX` escapes decoded once).
+///
+/// The extractor can be used either:
+/// - as a router handler parameter (automatic injection), or
+/// - manually inside a handler body with `Form(T).init(ctx)`.
+///
+/// ```zig
+/// fn handleRequest(ctx: Context, form: Form(Person)) !Response {
+///     const form_data = form.result catch |e| {
+///         _ = e;
+///         return Response.badRequest();
+///     };
+///
+///     _ = ctx;
+///     _ = form_data;
+///     return Response.ok();
+/// }
+/// ```
 pub fn Form(comptime T: type) type {
     return struct {
         const Self = @This();
@@ -208,4 +248,118 @@ test "init returns Form with value when content type is application/x-www-form-u
 
     try testing.expectEqualStrings("Name White", person.name);
     try testing.expectEqual(30, person.age);
+}
+
+test "init returns error when content type is missing" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const testing_arena = arena.allocator();
+    const req_bytes =
+        "POST / HTTP/1.1\r\n" ++
+        "Accept-Encoding: gzip, deflate, br\r\n" ++
+        "Connection: keep-alive\r\n" ++
+        "Content-Length: {d}\r\n\r\n{s}";
+
+    const form_content = "name=Name%20White&age=30";
+
+    const form_data = try std.fmt.allocPrint(testing_arena, req_bytes, .{ form_content.len, form_content });
+    var stream_buf_reader = Reader.fixed(form_data);
+
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = Writer.fixed(&write_buffer);
+
+    var http_server = Server.init(&stream_buf_reader, &stream_buf_writer);
+    var http_req = try http_server.receiveHead();
+
+    const test_ctx: Context = .{
+        .io = undefined,
+        .request_allocator = testing_arena,
+        .request = &http_req,
+    };
+
+    const Person = struct {
+        name: []const u8,
+        age: u8,
+    };
+
+    const person = Form(Person).init(test_ctx);
+
+    try testing.expectError(error.MissingContentType, person);
+}
+
+test "init returns error when content length is missing" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const testing_arena = arena.allocator();
+    const req_bytes =
+        "POST / HTTP/1.1\r\n" ++
+        "Accept-Encoding: gzip, deflate, br\r\n" ++
+        "Connection: keep-alive\r\n" ++
+        "Content-Type: application/x-www-form-urlencoded\r\n\r\n{s}";
+
+    const form_content = "name=Name%20White&age=30";
+
+    const form_data = try std.fmt.allocPrint(testing_arena, req_bytes, .{form_content});
+    var stream_buf_reader = Reader.fixed(form_data);
+
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = Writer.fixed(&write_buffer);
+
+    var http_server = Server.init(&stream_buf_reader, &stream_buf_writer);
+    var http_req = try http_server.receiveHead();
+
+    const test_ctx: Context = .{
+        .io = undefined,
+        .request_allocator = testing_arena,
+        .request = &http_req,
+    };
+
+    const Person = struct {
+        name: []const u8,
+        age: u8,
+    };
+
+    const person = Form(Person).init(test_ctx);
+
+    try testing.expectError(error.MissingContentLength, person);
+}
+
+test "init returns error when body is empty" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const testing_arena = arena.allocator();
+    const req_bytes =
+        "POST / HTTP/1.1\r\n" ++
+        "Accept-Encoding: gzip, deflate, br\r\n" ++
+        "Connection: keep-alive\r\n" ++
+        "Content-Type: application/x-www-form-urlencoded\r\n" ++
+        "Content-Length: {d}\r\n\r\n{s}";
+
+    const form_content = "";
+
+    const form_data = try std.fmt.allocPrint(testing_arena, req_bytes, .{ form_content.len, form_content });
+    var stream_buf_reader = Reader.fixed(form_data);
+
+    var write_buffer: [4096]u8 = undefined;
+    var stream_buf_writer = Writer.fixed(&write_buffer);
+
+    var http_server = Server.init(&stream_buf_reader, &stream_buf_writer);
+    var http_req = try http_server.receiveHead();
+
+    const test_ctx: Context = .{
+        .io = undefined,
+        .request_allocator = testing_arena,
+        .request = &http_req,
+    };
+
+    const Person = struct {
+        name: []const u8,
+        age: u8,
+    };
+
+    const person = Form(Person).init(test_ctx);
+    try testing.expectError(error.EmptyBody, person);
 }

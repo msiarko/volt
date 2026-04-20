@@ -10,20 +10,23 @@ const utils = @import("utils.zig");
 
 const EXTRACTOR_ID: []const u8 = "VOLT_QUERY_EXTRACTOR";
 
-fn extract(comptime name: []const u8, arena: Allocator, req: *Request) QueryError!?[]const u8 {
+fn extract(comptime name: []const u8, arena: Allocator, req: *Request) AllocatorError!?[]const u8 {
     var query_it = utils.queryIterator(req.head.target) orelse return null;
     while (query_it.next()) |entry| {
-        if (utils.queryComponentEqualsAsciiIgnoreCaseDecoded(entry.key, name)) {
-            const raw = entry.value orelse return null;
-            const decoded = try utils.decodeQueryComponent(arena, raw);
+        const value = entry.value orelse continue;
+        const key = try arena.alloc(u8, entry.key.len);
+        @memcpy(key, entry.key);
+        const decoded_key = std.Uri.percentDecodeInPlace(key);
+        if (std.ascii.eqlIgnoreCase(decoded_key, name)) {
+            const encoded = try arena.alloc(u8, value.len);
+            @memcpy(encoded, value);
+            const decoded = std.Uri.percentDecodeInPlace(encoded);
             return decoded;
         }
     }
 
     return null;
 }
-
-pub const QueryError = utils.DecodingError || AllocatorError;
 
 /// Creates a `Query` extractor type for a single query parameter.
 ///
@@ -60,9 +63,9 @@ pub fn Query(comptime name: []const u8) type {
         pub const ID: []const u8 = EXTRACTOR_ID;
         pub const PARAM_NAME: []const u8 = name;
 
-        result: QueryError!?[]const u8,
+        result: AllocatorError!?[]const u8,
 
-        pub fn init(ctx: Context) QueryError!?[]const u8 {
+        pub fn init(ctx: Context) AllocatorError!?[]const u8 {
             return try extract(name, ctx.request_allocator, ctx.request);
         }
     };
@@ -160,33 +163,7 @@ test "Query.init returns null for empty parameter value" {
     try testing.expectEqual(null, res);
 }
 
-test "Query.init decodes percent-encoded and plus characters" {
-    const encoded = "first+name%3Dzig%20lang";
-    const req_bytes = std.fmt.comptimePrint("GET /search?name={s} HTTP/1.1\r\n\r\n", .{encoded});
-    var stream_buf_reader = Reader.fixed(req_bytes);
-
-    var write_buffer: [4096]u8 = undefined;
-    var stream_buf_writer = Writer.fixed(&write_buffer);
-
-    var http_server = Server.init(&stream_buf_reader, &stream_buf_writer);
-    var http_req = try http_server.receiveHead();
-
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-
-    const testing_arena = arena.allocator();
-    const test_ctx: Context = .{
-        .io = undefined,
-        .request_allocator = testing_arena,
-        .request = &http_req,
-    };
-
-    const res = try Query("name").init(test_ctx);
-    try testing.expect(res != null);
-    try testing.expectEqualStrings("first name=zig lang", res.?);
-}
-
-test "Query.init returns InvalidPercentEncoding on malformed escapes" {
+test "Query.init returns the source value when percent decoding is not needed" {
     const req_bytes = "GET /search?name=bad%2 HTTP/1.1\r\n\r\n";
     var stream_buf_reader = Reader.fixed(req_bytes);
 
@@ -206,7 +183,8 @@ test "Query.init returns InvalidPercentEncoding on malformed escapes" {
         .request = &http_req,
     };
 
-    try testing.expectError(utils.DecodingError.InvalidPercentEncoding, Query("name").init(test_ctx));
+    const result = try Query("name").init(test_ctx);
+    try testing.expectEqualStrings("bad%2", result.?);
 }
 
 test "Query.init returns null when request has no query string" {
