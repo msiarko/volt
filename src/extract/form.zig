@@ -4,66 +4,61 @@ const utils = @import("utils.zig");
 const Request = std.http.Server.Request;
 
 const EXTRACTOR_ID: []const u8 = "VOLT_FORM_EXTRACTOR";
+const CONTENT_DISPOSITION: []const u8 = "Content-Disposition: form-data; name=\"";
 
 fn extract(comptime T: type, arena: std.mem.Allocator, req: *Request) !*T {
-    var header_it = req.iterateHeaders();
-    while (header_it.next()) |entry| {
-        if (std.ascii.eqlIgnoreCase(entry.name, "Content-Type")) {
-            const content_type = entry.value;
-            if (std.mem.startsWith(u8, content_type, "multipart/form-data; boundary=")) {
-                var result: *T = try arena.create(T);
-                errdefer arena.destroy(result);
+    const content_type = req.head.content_type orelse return error.MissingContentType;
+    const content_length = req.head.content_length orelse return error.MissingContentLength;
+    if (std.mem.startsWith(u8, content_type, "multipart/form-data")) {
+        var result: *T = try arena.create(T);
+        errdefer arena.destroy(result);
 
-                if (std.mem.findLast(u8, content_type, "boundary=")) |boundary_pos| {
-                    const boundary = std.mem.trim(u8, content_type[boundary_pos + 9 ..], "\r\n");
-                    const splitter = try std.fmt.allocPrint(arena, "--{s}", .{boundary});
-                    defer arena.free(splitter);
+        const buff = try arena.alloc(u8, content_length);
+        defer arena.free(buff);
 
-                    const buff = try arena.alloc(u8, req.head.content_length.?);
-                    defer arena.free(buff);
+        const reader = req.server.reader.bodyReader(
+            buff,
+            req.head.transfer_encoding,
+            content_length,
+        );
 
-                    const reader = req.server.reader.bodyReader(
-                        buff,
-                        req.head.transfer_encoding,
-                        req.head.content_length,
-                    );
+        const content = try reader.readAlloc(arena, content_length);
+        const boundary_pos = std.mem.findLast(u8, content_type, "boundary=") orelse return error.BoundaryMissing;
+        const boundary = std.mem.trim(u8, content_type[boundary_pos + 9 ..], "\r\n");
+        const splitter = try std.fmt.allocPrint(arena, "--{s}", .{boundary});
+        defer arena.free(splitter);
 
-                    const content = try reader.readAlloc(arena, req.head.content_length.?);
-                    var body_it = std.mem.splitSequence(u8, content, splitter);
-                    while (body_it.next()) |part| {
-                        const part_trimmed = std.mem.trim(u8, part, "\r\n");
-                        if (part_trimmed.len == 0 or std.mem.eql(u8, "--", part_trimmed)) continue;
-                        var it = std.mem.splitSequence(u8, part_trimmed, "\r\n\r\n");
-                        const headers = it.next().?;
-                        var part_header_it = std.mem.splitSequence(u8, headers, "\r\n");
-                        const key = blk: {
-                            while (part_header_it.next()) |header| {
-                                if (std.mem.startsWith(u8, header, "Content-Disposition: form-data; name=\"")) {
-                                    const name_start = 38;
-                                    const name_end = std.mem.findLast(u8, header[name_start..], "\"") orelse continue;
-                                    break :blk header[name_start .. name_start + name_end];
-                                }
-                            }
-
-                            unreachable;
-                        };
-                        const value = it.next().?;
-                        inline for (std.meta.fields(T)) |field| {
-                            if (std.mem.eql(u8, field.name, key)) {
-                                @field(result, field.name) = try utils.parse(field.type, value);
-                            }
-                        }
+        var body_it = std.mem.splitSequence(u8, content, splitter);
+        while (body_it.next()) |part| {
+            const part_trimmed = std.mem.trim(u8, part, "\r\n");
+            if (part_trimmed.len == 0 or std.mem.eql(u8, "--", part_trimmed)) continue;
+            var it = std.mem.splitSequence(u8, part_trimmed, "\r\n\r\n");
+            const headers = it.next() orelse continue;
+            var part_header_it = std.mem.splitSequence(u8, headers, "\r\n");
+            const key = blk: {
+                while (part_header_it.next()) |header| {
+                    if (std.mem.startsWith(u8, header, CONTENT_DISPOSITION)) {
+                        const name_start = CONTENT_DISPOSITION.len;
+                        const name_end = std.mem.findLast(u8, header[name_start..], "\"") orelse continue;
+                        break :blk header[name_start .. name_start + name_end];
                     }
-
-                    return result;
                 }
 
-                return error.Unimplemented; // TODO: implement x-www-form-urlencoded support
+                unreachable;
+            };
+
+            const value = it.next() orelse continue;
+            inline for (std.meta.fields(T)) |field| {
+                if (std.mem.eql(u8, field.name, key)) {
+                    @field(result, field.name) = try utils.parse(field.type, value);
+                }
             }
         }
+
+        return result;
     }
 
-    return error.FormDataHeaderNotFound;
+    return error.Unimplemented; // TODO: implement x-www-form-urlencoded support
 }
 
 pub fn Form(comptime T: type) type {

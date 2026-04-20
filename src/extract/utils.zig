@@ -130,6 +130,7 @@ pub fn parse(comptime T: type, val: []const u8) !T {
         .float => try std.fmt.parseFloat(T, val),
         .int => try std.fmt.parseInt(T, val, 10),
         .@"enum" => std.meta.stringToEnum(T, val) orelse return StringToEnumError.InvalidEnumValue,
+        .@"struct" => return error.Unimplemented, // TODO: support nested structs in form data
         else => val,
     };
 }
