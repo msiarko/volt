@@ -8,15 +8,88 @@ const utils = @import("utils.zig");
 const Request = std.http.Server.Request;
 
 const EXTRACTOR_ID: []const u8 = "VOLT_FORM_EXTRACTOR";
-const CONTENT_DISPOSITION: []const u8 = "Content-Disposition: form-data; name=\"";
+const CONTENT_DISPOSITION: []const u8 = "Content-Disposition";
 
 const FormError = utils.ParseError || AllocatorError || ReadAllocError || error{
     MissingContentType,
     MissingContentLength,
     EmptyBody,
-    BoundaryMissing,
+    MalformedMultipartBody,
+    MissingBoundary,
     UnsupportedContentType,
+    EmptyFormDataKey,
+    EmptyFormDataValue,
 };
+
+fn extractMultipartFormData(
+    comptime T: type,
+    arena: Allocator,
+    splitter: []const u8,
+    content: []const u8,
+) FormError!*T {
+    const out: *T = try arena.create(T);
+    errdefer arena.destroy(out);
+
+    var body_it = std.mem.splitSequence(u8, content, splitter);
+    while (body_it.next()) |part| {
+        const part_trimmed = std.mem.trim(u8, part, "\r\n");
+        if (part_trimmed.len == 0 or std.mem.eql(u8, "--", part_trimmed)) continue;
+        var it = std.mem.splitSequence(u8, part_trimmed, "\r\n\r\n");
+        const headers = it.next() orelse return FormError.MalformedMultipartBody;
+        const key = blk: {
+            var part_header_it = std.mem.splitSequence(u8, headers, "\r\n");
+            while (part_header_it.next()) |header| {
+                if (std.mem.startsWith(u8, header, CONTENT_DISPOSITION)) {
+                    var name_start = std.mem.findScalar(u8, header, '"') orelse
+                        return FormError.MalformedMultipartBody;
+
+                    name_start += 1;
+                    const name_end = std.mem.findScalarLast(u8, header[name_start..], '"') orelse
+                        return FormError.MalformedMultipartBody;
+
+                    break :blk header[name_start .. name_start + name_end];
+                }
+            }
+
+            unreachable;
+        };
+
+        const value = it.next() orelse return FormError.MalformedMultipartBody;
+        inline for (std.meta.fields(T)) |field| {
+            if (std.mem.eql(u8, field.name, key)) {
+                @field(out, field.name) = try utils.parse(field.type, value);
+            }
+        }
+    }
+
+    return out;
+}
+
+fn extractUrlEncodedFormData(
+    comptime T: type,
+    arena: std.mem.Allocator,
+    content: []const u8,
+) FormError!*T {
+    const out: *T = try arena.create(T);
+    errdefer arena.destroy(out);
+
+    var pairs_it = std.mem.splitScalar(u8, content, '&');
+    while (pairs_it.next()) |pair| {
+        var kv_it = std.mem.splitScalar(u8, pair, '=');
+        const key = kv_it.next() orelse return FormError.EmptyFormDataKey;
+        const value = kv_it.next() orelse return FormError.EmptyFormDataValue;
+        const key_decoded = try utils.decodeUrl(arena, key);
+        const value_decoded = try utils.decodeUrl(arena, value);
+
+        inline for (std.meta.fields(T)) |field| {
+            if (std.mem.eql(u8, field.name, key_decoded)) {
+                @field(out, field.name) = try utils.parse(field.type, value_decoded);
+            }
+        }
+    }
+
+    return out;
+}
 
 fn extract(comptime T: type, arena: Allocator, req: *Request) FormError!*T {
     const content_type = req.head.content_type orelse return FormError.MissingContentType;
@@ -32,61 +105,15 @@ fn extract(comptime T: type, arena: Allocator, req: *Request) FormError!*T {
     );
 
     const content = try reader.readAlloc(arena, content_length);
-    var result: *T = try arena.create(T);
-    errdefer arena.destroy(result);
-
-    // TODO: Refactor this to be more modular and extensible
     if (std.mem.startsWith(u8, content_type, "multipart/form-data")) {
-        const boundary_pos = std.mem.findLast(u8, content_type, "boundary=") orelse return FormError.BoundaryMissing;
+        const boundary_pos = std.mem.findLast(u8, content_type, "boundary=") orelse return FormError.MissingBoundary;
         const boundary = std.mem.trim(u8, content_type[boundary_pos + 9 ..], "\r\n");
         const splitter = try std.fmt.allocPrint(arena, "--{s}", .{boundary});
         defer arena.free(splitter);
 
-        var body_it = std.mem.splitSequence(u8, content, splitter);
-        while (body_it.next()) |part| {
-            const part_trimmed = std.mem.trim(u8, part, "\r\n");
-            if (part_trimmed.len == 0 or std.mem.eql(u8, "--", part_trimmed)) continue;
-            var it = std.mem.splitSequence(u8, part_trimmed, "\r\n\r\n");
-            const headers = it.next() orelse continue;
-            var part_header_it = std.mem.splitSequence(u8, headers, "\r\n");
-            const key = blk: {
-                while (part_header_it.next()) |header| {
-                    if (std.mem.startsWith(u8, header, CONTENT_DISPOSITION)) {
-                        const name_start = CONTENT_DISPOSITION.len;
-                        const name_end = std.mem.findLast(u8, header[name_start..], "\"") orelse continue;
-                        break :blk header[name_start .. name_start + name_end];
-                    }
-                }
-
-                unreachable;
-            };
-
-            const value = it.next() orelse continue;
-            inline for (std.meta.fields(T)) |field| {
-                if (std.mem.eql(u8, field.name, key)) {
-                    @field(result, field.name) = try utils.parse(field.type, value);
-                }
-            }
-        }
-
-        return result;
+        return extractMultipartFormData(T, arena, splitter, content);
     } else if (std.mem.eql(u8, content_type, "application/x-www-form-urlencoded")) {
-        var pairs_it = std.mem.splitScalar(u8, content, '&');
-        while (pairs_it.next()) |pair| {
-            var kv_it = std.mem.splitScalar(u8, pair, '=');
-            const key = kv_it.next() orelse continue;
-            const value = kv_it.next() orelse continue;
-            const key_decoded = try utils.decodeUrl(arena, key);
-            const value_decoded = try utils.decodeUrl(arena, value);
-
-            inline for (std.meta.fields(T)) |field| {
-                if (std.mem.eql(u8, field.name, key_decoded)) {
-                    @field(result, field.name) = try utils.parse(field.type, value_decoded);
-                }
-            }
-        }
-
-        return result;
+        return extractUrlEncodedFormData(T, arena, content);
     } else {
         return FormError.UnsupportedContentType;
     }
@@ -122,14 +149,12 @@ fn extract(comptime T: type, arena: Allocator, req: *Request) FormError!*T {
 /// ```
 pub fn Form(comptime T: type) type {
     return struct {
-        const Self = @This();
-
         pub const ID: []const u8 = EXTRACTOR_ID;
         pub const PAYLOAD_TYPE: type = T;
 
-        result: anyerror!*T,
+        result: FormError!*T,
 
-        pub fn init(ctx: Context) !*T {
+        pub fn init(ctx: Context) FormError!*T {
             return extract(T, ctx.request_allocator, ctx.request);
         }
     };
