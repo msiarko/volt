@@ -18,6 +18,7 @@ pub const Query = query.Query;
 pub const TypedQuery = typed_query.TypedQuery;
 pub const Header = header.Header;
 pub const RouteParam = route_param.RouteParam;
+pub const Form = form.Form;
 
 const JsonResolver = json.Resolver;
 const WebSocketResolver = web_socket.Resolver;
@@ -25,6 +26,7 @@ const QueryResolver = query.Resolver;
 const TypedQueryResolver = typed_query.Resolver;
 const HeaderResolver = header.Resolver;
 const ParamResolver = route_param.Resolver;
+const FormResolver = form.Resolver;
 
 const extractor_resolvers = .{
     JsonResolver,
@@ -32,6 +34,7 @@ const extractor_resolvers = .{
     QueryResolver,
     TypedQueryResolver,
     HeaderResolver,
+    FormResolver,
 };
 
 fn getParamsTypes(func_params: []const FnParam) []const type {
