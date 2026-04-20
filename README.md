@@ -2,27 +2,27 @@
   <img src="docs/assets/icon.png" alt="Volt logo" width="180" style="border-radius: 10%;" />
 </p>
 
-A modern, type-safe web library for Zig with automatic parameter injection and WebSocket support.
+A web library for Zig.
 
 > **Disclaimer**: Volt is **not** designed to be the fastest or most efficient HTTP library. It is built on top of Zig's standard `std.http` module and prioritizes **developer ergonomics over raw performance**. The primary goal is to enable **quick prototyping of REST APIs** with a flexible, type-safe interface. **Do not use Volt in production** — it is intended for development and prototyping purposes only.
 
 ## Features
 
-- ✨ **Designed for usability**: Clear abstractions and automatic parameter handling
-- 🔒 **Type Safe**: Compile-time parameter validation and injection
-- 🌐 **WebSocket Support**: Seamless WebSocket upgrade handling
-- 🧰 **Request Data Extraction**: Built-in extract support for request data and protocol upgrades
-- 🛣️ **Router**: Flexible routing with HTTP method support
-- ⚡ **Async**: Built-in asynchronous request handling
-- 🧠 **Memory Safe**: Request-scoped allocator in handlers, with explicit app-state allocation strategy
+- **Designed for usability**: Clear abstractions and automatic parameter handling
+- **Type Safe**: Compile-time parameter validation and injection
+- **WebSocket Support**: Seamless WebSocket upgrade handling
+- **Request Data Extraction**: Built-in extract support for request data and protocol upgrades
+- **Router**: Flexible routing with HTTP method support
+- **Async**: Built-in asynchronous request handling
+- **Memory Safe**: Request-scoped allocator in handlers, with explicit app-state allocation strategy
 
 ## Installation
 
 Add volt as a dependency in your `build.zig.zon`:
 
-Use `zig fetch --save "git+https://github.com/msiarko/volt#{branch or tag}"` to download the library directly into your project.
+Use `zig fetch --save "git+https://github.com/msiarko/volt"` to download the library directly into your project.
 
-> **Note**: Volt requires a **nightly version of Zig** (0.16.0-dev or later). Stable releases are not currently supported.
+> **Note**: Volt requires Zig v0.16.0+.
 
 Then add it to your `build.zig`:
 
@@ -112,11 +112,7 @@ All extractors can be used in two ways:
 fn createUserManual(ctx: volt.Context, state: *AppState) !volt.Response {
     _ = state;
 
-    const body = try volt.extract.Json(CreateUserRequest).init(ctx);
-
-    const user = body.result catch |err| {
-        return volt.Response.text(ctx.request_allocator, .bad_request, @errorName(err), null);
-    };
+    const user = try volt.extract.Json(CreateUserRequest).init(ctx);
 
     return volt.Response.text(ctx.request_allocator, .ok, user.name, null);
 }
@@ -502,8 +498,6 @@ Volt is built around several key components:
 ## Status & Roadmap
 
 **Current Version**: 0.0.5 (Early Development)
-
-**Requirements**: Nightly Zig only (0.16.0-dev or later). Stable Zig releases are not supported.
 
 This is an early-stage library. While the core routing and WebSocket functionality is stable, expect breaking changes as the API matures.
 
