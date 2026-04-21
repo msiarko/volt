@@ -39,27 +39,26 @@ Here's a simple "Hello World" server:
 const std = @import("std");
 const volt = @import("volt");
 
-const StatelessServer = volt.Server(void);
-const StatelessRouter = volt.Router(void);
+const Server = volt.Server;
+const Router = volt.Router(void);
 
 pub fn main(init: std.process.Init) !void {
-    var server = try StatelessServer.init(init.io, {}, .{});
-    var router: StatelessRouter = .init(init.gpa);
+    var server = try Server.init(init.io, .{});
+    var router: Router = .init(init.gpa, {});
     defer router.deinit(init.gpa);
 
     try router.get(init.gpa, "/", &indexHandler);
 
     const address = try std.Io.net.IpAddress.parse("127.0.0.1", 8080);
-    try server.listen(init.gpa, address, &router);
+    try server.listen(void, init.gpa, address, &router);
 }
 
 fn indexHandler(ctx: volt.Context) !volt.Response {
-    return .text(ctx.request_allocator, .ok, "Hello from Volt HTTP example!", null);
+    return .text(ctx.req_arena, .ok, "Hello from Volt HTTP example!", null);
 }
 ```
 
-For `volt.Server(void)`, handlers must omit the state parameter entirely.
-Using `*void` as a handler state parameter is rejected at compile time.
+For `volt.Router(void)`, handlers should omit the state parameter entirely.
 
 ## Routing
 
@@ -115,7 +114,7 @@ fn createUserManual(ctx: volt.Context, state: *AppState) !volt.Response {
 
     const user = try volt.extract.Json(CreateUserRequest).init(ctx);
 
-    return volt.Response.text(ctx.request_allocator, .ok, user.name, null);
+    return volt.Response.text(ctx.req_arena, .ok, user.name, null);
 }
 ```
 
@@ -149,11 +148,11 @@ fn createUser(
     _ = state;
 
     const user = user_data.result catch |err| {
-        return volt.Response.text(ctx.request_allocator, .bad_request, @errorName(err), null);
+        return volt.Response.text(ctx.req_arena, .bad_request, @errorName(err), null);
     };
 
     // Process user creation...
-    return volt.Response.json(ctx.request_allocator, .created, "{\"id\": 123}", null);
+    return volt.Response.json(ctx.req_arena, .created, "{\"id\": 123}", null);
 }
 ```
 
@@ -192,15 +191,15 @@ fn findUser(
     _ = state;
 
     const id = user_id.result catch |err| {
-        return volt.Response.text(ctx.request_allocator, .bad_request, @errorName(err), null);
+        return volt.Response.text(ctx.req_arena, .bad_request, @errorName(err), null);
     } orelse return volt.Response.text(
-        ctx.request_allocator,
+        ctx.req_arena,
         .bad_request,
         "Missing query parameter: id",
         null,
     );
 
-    return volt.Response.text(ctx.request_allocator, .ok, id, null);
+    return volt.Response.text(ctx.req_arena, .ok, id, null);
 }
 ```
 
@@ -215,10 +214,10 @@ fn secureHandler(
     _ = state;
 
     const token = auth.value orelse {
-        return volt.Response.text(ctx.request_allocator, .unauthorized, "Missing Authorization header", null);
+        return volt.Response.text(ctx.req_arena, .unauthorized, "Missing Authorization header", null);
     };
 
-    return volt.Response.text(ctx.request_allocator, .ok, token, null);
+    return volt.Response.text(ctx.req_arena, .ok, token, null);
 }
 ```
 
@@ -250,10 +249,10 @@ fn getUserById(
     _ = state;
 
     const id = user_id.value orelse {
-        return volt.Response.text(ctx.request_allocator, .bad_request, "Missing route parameter: id", null);
+        return volt.Response.text(ctx.req_arena, .bad_request, "Missing route parameter: id", null);
     };
 
-    return volt.Response.text(ctx.request_allocator, .ok, id, null);
+    return volt.Response.text(ctx.req_arena, .ok, id, null);
 }
 
 fn getTeamUser(
@@ -265,17 +264,17 @@ fn getTeamUser(
     _ = state;
 
     const team = team_id.value orelse {
-        return volt.Response.text(ctx.request_allocator, .bad_request, "Missing route parameter: team_id", null);
+        return volt.Response.text(ctx.req_arena, .bad_request, "Missing route parameter: team_id", null);
     };
 
     const user = user_id.value orelse {
-        return volt.Response.text(ctx.request_allocator, .bad_request, "Missing route parameter: user_id", null);
+        return volt.Response.text(ctx.req_arena, .bad_request, "Missing route parameter: user_id", null);
     };
 
     return volt.Response.text(
-        ctx.request_allocator,
+        ctx.req_arena,
         .ok,
-        try std.fmt.allocPrint(ctx.request_allocator, "team={s}, user={s}", .{ team, user }),
+        try std.fmt.allocPrint(ctx.req_arena, "team={s}, user={s}", .{ team, user }),
         null,
     );
 }
@@ -305,14 +304,14 @@ fn listUsers(
     _ = state;
 
     const filters = filters_query.result catch |err| {
-        return volt.Response.text(ctx.request_allocator, .bad_request, @errorName(err), null);
-    } orelse return volt.Response.text(ctx.request_allocator, .ok, "No filters provided", null);
+        return volt.Response.text(ctx.req_arena, .bad_request, @errorName(err), null);
+    } orelse return volt.Response.text(ctx.req_arena, .ok, "No filters provided", null);
 
     if (filters.name) |name| {
-        return volt.Response.text(ctx.request_allocator, .ok, name, null);
+        return volt.Response.text(ctx.req_arena, .ok, name, null);
     }
 
-    return volt.Response.text(ctx.request_allocator, .ok, "No filters provided", null);
+    return volt.Response.text(ctx.req_arena, .ok, "No filters provided", null);
 }
 ```
 
@@ -322,18 +321,19 @@ Volt provides convenient response creation methods:
 
 ```zig
 // JSON responses
-return volt.Response.json(ctx.request_allocator, .ok, "{\"status\": \"success\"}", null);
+return volt.Response.json(ctx.req_arena, .ok, "{\"status\": \"success\"}", null);
 
 // Plain text responses
-return volt.Response.text(ctx.request_allocator, .ok, "Hello, World!", null);
+return volt.Response.text(ctx.req_arena, .ok, "Hello, World!", null);
 
 // Error responses
-return volt.Response.internal_server_error(ctx.request_allocator, "Something went wrong", null);
+return volt.Response.internal_server_error(ctx.req_arena, "Something went wrong", null);
 ```
 
 ## Application State
 
-Use the generic `Server(State)` to maintain application-wide state:
+Use `Router(State)` to provide application state to handlers. For shared mutable
+state, pass a pointer type (for example `*AppState`) as the router state.
 
 ```zig
 const AppState = struct {
@@ -350,7 +350,8 @@ const AppState = struct {
     }
 };
 
-const Server = volt.Server(AppState);
+const Server = volt.Server;
+const AppRouter = volt.Router(*AppState);
 
 // Access state in handlers
 fn myHandler(ctx: volt.Context, state: *AppState) !volt.Response {
@@ -358,7 +359,7 @@ fn myHandler(ctx: volt.Context, state: *AppState) !volt.Response {
     defer state.mutex.unlock(ctx.io);
 
     // Use state.database, state.cache, etc.
-    return volt.Response.text(ctx.request_allocator, .ok, "Success", null);
+    return volt.Response.text(ctx.req_arena, .ok, "Success", null);
 }
 ```
 
@@ -372,34 +373,35 @@ const volt = @import("volt");
 
 const AppState = struct {};
 
-const Server = volt.Server(AppState);
-const AppRouter = volt.Router(AppState);
+const Server = volt.Server;
+const AppRouter = volt.Router(*AppState);
 
 pub fn main(init: std.process.Init) !void {
-    var server = try Server.init(init.io, .{}, .{});
-    var router: AppRouter = .init(init.gpa);
+    var state: AppState = .{};
+    var server = try Server.init(init.io, .{});
+    var router: AppRouter = .init(init.gpa, &state);
     defer router.deinit(init.gpa);
 
     try router.get(init.gpa, "/", &indexHandler);
     try router.post(init.gpa, "/echo", &echoHandler);
 
     const address = try std.Io.net.IpAddress.parse("127.0.0.1", 8080);
-    try server.listen(init.gpa, address, &router);
+    try server.listen(*AppState, init.gpa, address, &router);
 }
 
 fn indexHandler(ctx: volt.Context, state: *AppState) !volt.Response {
     _ = state;
-    return .text(ctx.request_allocator, .ok, "Hello from Volt!", null);
+    return .text(ctx.req_arena, .ok, "Hello from Volt!", null);
 }
 
 fn echoHandler(ctx: volt.Context, state: *AppState, body: volt.extract.Json(EchoRequest)) !volt.Response {
     _ = state;
 
     const request = body.result catch |err| {
-        return .text(ctx.request_allocator, .bad_request, @errorName(err), null);
+        return .text(ctx.req_arena, .bad_request, @errorName(err), null);
     };
 
-    return .text(ctx.request_allocator, .ok, request.message, null);
+    return .text(ctx.req_arena, .ok, request.message, null);
 }
 
 const EchoRequest = struct {
@@ -415,18 +417,19 @@ const volt = @import("volt");
 
 const AppState = struct {};
 
-const Server = volt.Server(AppState);
-const AppRouter = volt.Router(AppState);
+const Server = volt.Server;
+const AppRouter = volt.Router(*AppState);
 
 pub fn main(init: std.process.Init) !void {
-    var server = try Server.init(init.io, .{}, .{});
-    var router: AppRouter = .init(init.gpa);
+    var state: AppState = .{};
+    var server = try Server.init(init.io, .{});
+    var router: AppRouter = .init(init.gpa, &state);
     defer router.deinit(init.gpa);
 
     try router.get(init.gpa, "/ws", &webSocketHandler);
 
     const address = try std.Io.net.IpAddress.parse("127.0.0.1", 8080);
-    try server.listen(init.gpa, address, &router);
+    try server.listen(*AppState, init.gpa, address, &router);
 }
 
 fn webSocketHandler(ctx: volt.Context, state: *AppState, ws: volt.extract.WebSocket) !volt.Response {
@@ -454,7 +457,7 @@ fn handleConnection(ctx: volt.Context, state: *AppState, socket: *std.http.Serve
 
 Volt handlers should allocate with the request allocator only:
 
-- **Request Allocator** (`ctx.request_allocator`): Temporary allocations for parsing, string manipulation, and response construction. Automatically freed after the request completes.
+- **Request Allocator** (`ctx.req_arena`): Temporary allocations for parsing, string manipulation, and response construction. Automatically freed after the request completes.
 
 For long-lived allocations used by application state updates, include an allocator in the state struct itself. This keeps ownership explicit and allows manual deinitialization when the server stops.
 
@@ -476,15 +479,15 @@ const AppState = struct {
 };
 
 fn myHandler(ctx: volt.Context, state: *AppState) !volt.Response {
-    // Use request_allocator for temporary work
-    const temp_buffer = try ctx.request_allocator.alloc(u8, 1024);
+    // Use req_arena for temporary work
+    const temp_buffer = try ctx.req_arena.alloc(u8, 1024);
     _ = temp_buffer;
 
     // Use state allocator for persistent data
     const persistent_data = try state.allocator.dupe(u8, "persistent-value");
     try state.cache.put("key", persistent_data);
 
-    return volt.Response.text(ctx.request_allocator, .ok, "Success", null);
+    return volt.Response.text(ctx.req_arena, .ok, "Success", null);
 }
 ```
 
@@ -492,15 +495,15 @@ fn myHandler(ctx: volt.Context, state: *AppState) !volt.Response {
 
 Volt is built around several key components:
 
-- **Server**: Generic HTTP server with async request handling
-- **Router**: Type-safe routing with automatic parameter injection
+- **Server**: HTTP runtime for accepting and scheduling connections
+- **Router**: Type-safe routing, request handling, and parameter injection
 - **Context**: Request execution context with I/O and memory resources
 - **Extract**: Automatic parameter extraction (JSON, WebSocket, Query, TypedQuery, Header, RouteParam, Form)
 - **Response**: Unified response type for HTTP and WebSocket responses
 
 ## Status & Roadmap
 
-**Current Version**: 0.0.5 (Early Development)
+**Current Version**: 0.0.7 (Early Development)
 
 This is an early-stage library. While the core routing and WebSocket functionality is stable, expect breaking changes as the API matures.
 

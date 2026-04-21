@@ -1,7 +1,7 @@
 const std = @import("std");
 const HttpStatus = std.http.Status;
 const HttpRequest = std.http.Server.Request;
-const WebSocket = @import("../extract/root.zig").WebSocket;
+const WebSocket = @import("extractors/WebSocket.zig");
 const HttpHeader = std.http.Header;
 
 /// Unified response type that can represent HTTP responses or WebSocket upgrades.
@@ -20,7 +20,7 @@ const HttpHeader = std.http.Header;
 pub const Response = union(enum) {
     const Self = @This();
 
-    web_socket: WebSocket,
+    web_socket: ?WebSocket,
     http: HttpResponse,
 
     fn into_http_response(
@@ -155,6 +155,10 @@ pub const Response = union(enum) {
         };
 
         return into_http_response(arena, status, content, content_headers, extra_headers);
+    }
+
+    pub fn webSocket(web_socket: ?WebSocket) !Self {
+        return .{ .web_socket = web_socket };
     }
 };
 

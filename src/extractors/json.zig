@@ -6,7 +6,7 @@ const AllocatorError = std.mem.Allocator.Error;
 const ReaderError = std.Io.Reader.Error;
 const ParseError = std.json.ParseError(std.json.Scanner);
 
-const Context = @import("../http/context.zig").Context;
+const Context = @import("../Context.zig");
 
 const EXTRACTOR_ID: []const u8 = "VOLT_JSON_EXTRACTOR";
 
@@ -92,7 +92,7 @@ pub fn Json(comptime T: type) type {
         result: JsonError!T,
 
         pub fn init(ctx: Context) JsonError!T {
-            return try extract(T, ctx.request_allocator, ctx.request);
+            return try extract(T, ctx.req_arena, ctx.raw_req);
         }
     };
 }
@@ -134,8 +134,8 @@ test "Json.init returns extractor error when content type header is missing" {
     const testing_arena = arena.allocator();
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_arena,
-        .request = &http_req,
+        .req_arena = testing_arena,
+        .raw_req = &http_req,
     };
 
     try testing.expectError(RequestValidationError.ContentTypeMissing, Json(Person).init(test_ctx));
@@ -162,8 +162,8 @@ test "Json.init returns RequestBodyMissing for methods without a body (GET)" {
     const testing_arena = arena.allocator();
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_arena,
-        .request = &http_req,
+        .req_arena = testing_arena,
+        .raw_req = &http_req,
     };
 
     try testing.expectError(RequestValidationError.RequestBodyMissing, Json(Person).init(test_ctx));
@@ -190,8 +190,8 @@ test "Json.init returns ContentLengthMissing when header is absent" {
     const testing_arena = arena.allocator();
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_arena,
-        .request = &http_req,
+        .req_arena = testing_arena,
+        .raw_req = &http_req,
     };
 
     try testing.expectError(RequestValidationError.ContentLengthMissing, Json(Person).init(test_ctx));
@@ -218,8 +218,8 @@ test "Json.init returns EmptyRequestBody when content length is zero" {
     const testing_arena = arena.allocator();
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_arena,
-        .request = &http_req,
+        .req_arena = testing_arena,
+        .raw_req = &http_req,
     };
 
     try testing.expectError(RequestValidationError.EmptyRequestBody, Json(Person).init(test_ctx));
@@ -246,8 +246,8 @@ test "Json.init returns InvalidContentType when content type header is incorrect
     const testing_arena = arena.allocator();
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_arena,
-        .request = &http_req,
+        .req_arena = testing_arena,
+        .raw_req = &http_req,
     };
 
     try testing.expectError(RequestValidationError.InvalidContentType, Json(Person).init(test_ctx));
@@ -275,8 +275,8 @@ test "Json.init successfully parses valid JSON body" {
     const testing_arena = arena.allocator();
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_arena,
-        .request = &http_req,
+        .req_arena = testing_arena,
+        .raw_req = &http_req,
     };
 
     const person = try Json(Person).init(test_ctx);
@@ -307,8 +307,8 @@ test "Json.init surfaces parse errors for invalid JSON" {
     const testing_arena = arena.allocator();
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_arena,
-        .request = &http_req,
+        .req_arena = testing_arena,
+        .raw_req = &http_req,
     };
 
     _ = Json(Person).init(test_ctx) catch |err| {

@@ -5,7 +5,7 @@ const Request = std.http.Server.Request;
 const StructField = std.builtin.Type.StructField;
 const AllocatorError = std.mem.Allocator.Error;
 
-const Context = @import("../http/context.zig").Context;
+const Context = @import("../Context.zig");
 const utils = @import("utils.zig");
 
 const EXTRACTOR_ID: []const u8 = "VOLT_QUERY_EXTRACTOR";
@@ -35,8 +35,6 @@ fn extract(comptime name: []const u8, arena: Allocator, req: *Request) Allocator
 /// - `[]const u8`: decoded parameter value
 ///
 /// Parameter-name matching is case-insensitive and compares against the decoded key.
-/// Value decoding is single-pass (`+` -> space, `%XX` escapes decoded once).
-///
 /// The extractor can be used either:
 /// - as a router handler parameter (automatic injection), or
 /// - manually inside a handler body with `Query(name).init(ctx)`.
@@ -62,7 +60,7 @@ pub fn Query(comptime name: []const u8) type {
         result: AllocatorError!?[]const u8,
 
         pub fn init(ctx: Context) AllocatorError!?[]const u8 {
-            return try extract(name, ctx.request_allocator, ctx.request);
+            return try extract(name, ctx.req_arena, ctx.raw_req);
         }
     };
 }
@@ -101,8 +99,8 @@ test "Query.init returns value when query param is present" {
     const testing_arena = arena.allocator();
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_arena,
-        .request = &http_req,
+        .req_arena = testing_arena,
+        .raw_req = &http_req,
     };
 
     const res = try Query("name").init(test_ctx);
@@ -126,8 +124,8 @@ test "Query.init returns null when parameter is absent" {
     const testing_arena = arena.allocator();
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_arena,
-        .request = &http_req,
+        .req_arena = testing_arena,
+        .raw_req = &http_req,
     };
 
     const res = try Query("name").init(test_ctx);
@@ -150,8 +148,8 @@ test "Query.init returns null for empty parameter value" {
     const testing_arena = arena.allocator();
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_arena,
-        .request = &http_req,
+        .req_arena = testing_arena,
+        .raw_req = &http_req,
     };
 
     const res = try Query("name").init(test_ctx);
@@ -175,8 +173,8 @@ test "Query.init returns the source value when percent decoding is not needed" {
     const testing_arena = arena.allocator();
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_arena,
-        .request = &http_req,
+        .req_arena = testing_arena,
+        .raw_req = &http_req,
     };
 
     const result = try Query("name").init(test_ctx);
@@ -199,8 +197,8 @@ test "Query.init returns null when request has no query string" {
     const testing_arena = arena.allocator();
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_arena,
-        .request = &http_req,
+        .req_arena = testing_arena,
+        .raw_req = &http_req,
     };
 
     const res = try Query("name").init(test_ctx);
@@ -223,8 +221,8 @@ test "Query.init matches decoded key name case-insensitively" {
     const testing_arena = arena.allocator();
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_arena,
-        .request = &http_req,
+        .req_arena = testing_arena,
+        .raw_req = &http_req,
     };
 
     const res = try Query("FIRST NAME").init(test_ctx);

@@ -5,7 +5,7 @@ const AllocatorError = std.mem.Allocator.Error;
 const Request = std.http.Server.Request;
 
 const utils = @import("utils.zig");
-const Context = @import("../http/context.zig").Context;
+const Context = @import("../Context.zig");
 
 const EXTRACTOR_ID: []const u8 = "VOLT_TYPED_QUERY_EXTRACTOR";
 
@@ -63,8 +63,6 @@ fn extract(comptime T: type, arena: Allocator, req: *Request) TypedQueryError!?*
 /// - `null`: request target has no query string
 /// - `*T`: allocated struct with each field set from matching query keys (unmatched fields are `null`)
 ///
-/// Values are single-pass decoded when needed (`+` -> space, `%XX` escapes decoded once).
-///
 /// The extractor can be used either:
 /// - as a router handler parameter (automatic injection), or
 /// - manually inside a handler body with `TypedQuery(T).init(ctx)`.
@@ -95,7 +93,7 @@ pub fn TypedQuery(comptime T: type) type {
         result: TypedQueryError!?*T,
 
         pub fn init(ctx: Context) TypedQueryError!?*T {
-            return try extract(T, ctx.request_allocator, ctx.request);
+            return try extract(T, ctx.req_arena, ctx.raw_req);
         }
     };
 }
@@ -139,8 +137,8 @@ test "TypedQuery.init returns null when no query string is present" {
     const testing_arena = arena.allocator();
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_arena,
-        .request = &http_req,
+        .req_arena = testing_arena,
+        .raw_req = &http_req,
     };
 
     const result = try TypedQuery(Filter).init(test_ctx);
@@ -168,8 +166,8 @@ test "TypedQuery.init maps fields from query parameters" {
     const testing_arena = arena.allocator();
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_arena,
-        .request = &http_req,
+        .req_arena = testing_arena,
+        .raw_req = &http_req,
     };
 
     const typed = try TypedQuery(Filter).init(test_ctx);
@@ -199,8 +197,8 @@ test "TypedQuery.init returns pointer with null fields when query present but no
     const testing_arena = arena.allocator();
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_arena,
-        .request = &http_req,
+        .req_arena = testing_arena,
+        .raw_req = &http_req,
     };
 
     const typed = try TypedQuery(Filter).init(test_ctx);
@@ -231,8 +229,8 @@ test "TypedQuery.init field name matching is case-insensitive" {
     const testing_arena = arena.allocator();
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_arena,
-        .request = &http_req,
+        .req_arena = testing_arena,
+        .raw_req = &http_req,
     };
 
     const typed = try TypedQuery(Filter).init(test_ctx);
@@ -260,8 +258,8 @@ test "TypedQuery.init keeps matched empty values as null" {
     const testing_arena = arena.allocator();
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_arena,
-        .request = &http_req,
+        .req_arena = testing_arena,
+        .raw_req = &http_req,
     };
 
     const typed = try TypedQuery(Filter).init(test_ctx);
@@ -289,8 +287,8 @@ test "TypedQuery.init returns source value when percent decoding is not needed" 
     const testing_arena = arena.allocator();
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_arena,
-        .request = &http_req,
+        .req_arena = testing_arena,
+        .raw_req = &http_req,
     };
 
     const typed = try TypedQuery(Filter).init(test_ctx);
@@ -317,8 +315,8 @@ test "TypedQuery.init uses last value for duplicate keys" {
     const testing_arena = arena.allocator();
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_arena,
-        .request = &http_req,
+        .req_arena = testing_arena,
+        .raw_req = &http_req,
     };
 
     const typed = try TypedQuery(Filter).init(test_ctx);

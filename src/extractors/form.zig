@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 const AllocatorError = std.mem.Allocator.Error;
 const ReadAllocError = std.Io.Reader.ReadAllocError;
 const assert = std.debug.assert;
-const Context = @import("../http/context.zig").Context;
+const Context = @import("../Context.zig");
 const utils = @import("utils.zig");
 const Request = std.http.Server.Request;
 
@@ -156,7 +156,7 @@ pub fn Form(comptime T: type) type {
         result: FormError!*T,
 
         pub fn init(ctx: Context) FormError!*T {
-            return extract(T, ctx.request_allocator, ctx.request);
+            return extract(T, ctx.req_arena, ctx.raw_req);
         }
     };
 }
@@ -215,8 +215,8 @@ test "init returns Form with value when content type is multipart/form-data" {
 
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_arena,
-        .request = &http_req,
+        .req_arena = testing_arena,
+        .raw_req = &http_req,
     };
 
     const Person = struct {
@@ -258,8 +258,8 @@ test "init returns Form with value when content type is application/x-www-form-u
 
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_arena,
-        .request = &http_req,
+        .req_arena = testing_arena,
+        .raw_req = &http_req,
     };
 
     const Person = struct {
@@ -300,8 +300,8 @@ test "init returns error when content type is missing" {
 
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_arena,
-        .request = &http_req,
+        .req_arena = testing_arena,
+        .raw_req = &http_req,
     };
 
     const Person = struct {
@@ -338,8 +338,8 @@ test "init returns error when content length is missing" {
 
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_arena,
-        .request = &http_req,
+        .req_arena = testing_arena,
+        .raw_req = &http_req,
     };
 
     const Person = struct {
@@ -377,8 +377,8 @@ test "init returns error when body is empty" {
 
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_arena,
-        .request = &http_req,
+        .req_arena = testing_arena,
+        .raw_req = &http_req,
     };
 
     const Person = struct {

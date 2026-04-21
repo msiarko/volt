@@ -4,7 +4,7 @@
 //! - Keep control with application code.
 //! - Make extraction and allocation choices explicit.
 //! - Offer both automatic parameter injection and manual extraction from Context.
-//! - Let applications drop down to `ctx.request` for lower-level protocol control
+//! - Let applications drop down to `ctx.raw_req` for lower-level protocol control
 //!   when automatic extraction is not the right fit.
 //!
 //! Error behavior (important):
@@ -14,27 +14,41 @@
 //!   applications can decide whether to keep it or map errors explicitly.
 
 const std = @import("std");
-const http = @import("http/root.zig");
-const extract_mod = @import("extract/root.zig");
+
+const json = @import("extractors/json.zig");
+const query = @import("extractors/query.zig");
+const typed_query = @import("extractors/typed_query.zig");
+const header = @import("extractors/header.zig");
+const route_param = @import("extractors/route_param.zig");
+const form = @import("extractors/form.zig");
+const router = @import("router.zig");
+const response = @import("response.zig");
+
+pub const Server = @import("Server.zig");
+pub const Context = @import("Context.zig");
 
 pub const extract = struct {
-    pub const Json = extract_mod.Json;
-    pub const Query = extract_mod.Query;
-    pub const TypedQuery = extract_mod.TypedQuery;
-    pub const WebSocket = extract_mod.WebSocket;
-    pub const WebSocketError = extract_mod.WebSocketError;
-    pub const Header = extract_mod.Header;
-    pub const RouteParam = extract_mod.RouteParam;
-    pub const Form = extract_mod.Form;
+    pub const Json = json.Json;
+    pub const Query = query.Query;
+    pub const TypedQuery = typed_query.TypedQuery;
+    pub const WebSocket = @import("extractors/WebSocket.zig");
+    pub const Header = header.Header;
+    pub const RouteParam = route_param.RouteParam;
+    pub const Form = form.Form;
 };
 
-pub const Server = http.Server;
-pub const Router = http.Router;
-pub const Context = http.Context;
-pub const Response = http.Response;
+pub const Router = router.Router;
+pub const Response = response.Response;
 
 test {
-    const testing = @import("std").testing;
-    _ = testing.refAllDecls(http);
-    _ = testing.refAllDecls(extract_mod);
+    const testing = std.testing;
+    _ = testing.refAllDecls(json);
+    _ = testing.refAllDecls(query);
+    _ = testing.refAllDecls(typed_query);
+    _ = testing.refAllDecls(header);
+    _ = testing.refAllDecls(route_param);
+    _ = testing.refAllDecls(form);
+    _ = testing.refAllDecls(router);
+    _ = testing.refAllDecls(response);
+    _ = testing.refAllDecls(Server);
 }

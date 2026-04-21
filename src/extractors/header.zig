@@ -3,7 +3,7 @@ const Request = std.http.Server.Request;
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
-const Context = @import("../http/context.zig").Context;
+const Context = @import("../Context.zig");
 
 const EXTRACTOR_ID: []const u8 = "VOLT_HEADER_EXTRACTOR";
 
@@ -49,7 +49,7 @@ pub fn Header(comptime name: []const u8) type {
         value: ?[]const u8,
 
         pub fn init(ctx: Context) Self {
-            return extract(name, ctx.request);
+            return extract(name, ctx.raw_req);
         }
     };
 }
@@ -86,8 +86,8 @@ test "init returns Header with value when header is present" {
 
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_allocator,
-        .request = &http_req,
+        .req_arena = testing_allocator,
+        .raw_req = &http_req,
     };
     const header = Header("Authorization").init(test_ctx);
 
@@ -107,8 +107,8 @@ test "init returns Header with value when multiple headers are present" {
 
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_allocator,
-        .request = &http_req,
+        .req_arena = testing_allocator,
+        .raw_req = &http_req,
     };
     const header = Header("X-Request-Id").init(test_ctx);
 
@@ -128,8 +128,8 @@ test "init returns null when header is not present" {
 
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_allocator,
-        .request = &http_req,
+        .req_arena = testing_allocator,
+        .raw_req = &http_req,
     };
     const header = Header("Authorization").init(test_ctx);
 
@@ -148,8 +148,8 @@ test "init returns null when no headers are present" {
 
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_allocator,
-        .request = &http_req,
+        .req_arena = testing_allocator,
+        .raw_req = &http_req,
     };
     const header = Header("Authorization").init(test_ctx);
     try testing.expectEqual(null, header.value);
@@ -177,8 +177,8 @@ test "init table-driven header extraction" {
 
         const test_ctx: Context = .{
             .io = undefined,
-            .request_allocator = testing_allocator,
-            .request = &http_req,
+            .req_arena = testing_allocator,
+            .raw_req = &http_req,
         };
         const header = Header("Authorization").init(test_ctx);
 
@@ -202,8 +202,8 @@ test "init header name matching is case-insensitive" {
 
     const test_ctx: Context = .{
         .io = undefined,
-        .request_allocator = testing_allocator,
-        .request = &http_req,
+        .req_arena = testing_allocator,
+        .raw_req = &http_req,
     };
 
     const header = Header("authorization").init(test_ctx);

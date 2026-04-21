@@ -5,7 +5,7 @@ const AllocatorError = std.mem.Allocator.Error;
 const Request = std.http.Server.Request;
 const StructField = std.builtin.Type.StructField;
 
-const Context = @import("../http/context.zig").Context;
+const Context = @import("../Context.zig");
 const utils = @import("utils.zig");
 
 const EXTRACTOR_ID: []const u8 = "VOLT_ROUTE_PARAM_EXTRACTOR";
@@ -70,7 +70,7 @@ pub fn RouteParam(comptime name: []const u8) type {
         result: AllocatorError!?[]const u8,
 
         pub fn init(ctx: Context) AllocatorError!?[]const u8 {
-            return extract(name, ctx.request_allocator, ctx.request);
+            return extract(name, ctx.req_arena, ctx.raw_req);
         }
     };
 }
