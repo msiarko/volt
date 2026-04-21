@@ -53,9 +53,9 @@ pub fn Server(comptime State: type) type {
         /// Initializes a new HTTP server instance.
         ///
         /// Parameters:
-        /// - `allocator`: Internal allocator used by server/router internals
         /// - `io`: I/O interface for network operations
         /// - `state`: Initial application state
+        /// - `options`: Server runtime options
         ///
         /// Returns: A new Server instance ready to listen for connections
         pub fn init(io: std.Io, state: State, options: ServerOptions) !Self {
@@ -73,7 +73,9 @@ pub fn Server(comptime State: type) type {
         /// a separate async task.
         ///
         /// Parameters:
+        /// - `allocator`: Allocator used for per-request arena allocation
         /// - `address`: Network address to bind to (IP and port)
+        /// - `router`: Registered route table used to resolve handlers
         ///
         /// The server will continue running until interrupted or an error occurs.
         pub fn listen(self: *Self, allocator: Allocator, address: IpAddress, router: *const Router(State)) !void {

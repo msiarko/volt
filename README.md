@@ -40,15 +40,17 @@ const std = @import("std");
 const volt = @import("volt");
 
 const StatelessServer = volt.Server(void);
+const StatelessRouter = volt.Router(void);
 
 pub fn main(init: std.process.Init) !void {
-    var server: StatelessServer = .init(init.gpa, init.io, {});
-    defer server.deinit();
+    var server = try StatelessServer.init(init.io, {}, .{});
+    var router: StatelessRouter = .init(init.gpa);
+    defer router.deinit(init.gpa);
 
-    try server.router.get("/", &indexHandler);
+    try router.get(init.gpa, "/", &indexHandler);
 
     const address = try std.Io.net.IpAddress.parse("127.0.0.1", 8080);
-    try server.listen(address, .{});
+    try server.listen(init.gpa, address, &router);
 }
 
 fn indexHandler(ctx: volt.Context) !volt.Response {
@@ -64,11 +66,11 @@ Using `*void` as a handler state parameter is rejected at compile time.
 Volt provides a clean routing API with support for all HTTP methods:
 
 ```zig
-try server.router.get("/users", &getUsers);
-try server.router.post("/users", &createUser);
-try server.router.put("/users", &updateUser);
-try server.router.delete("/users", &deleteUser);
-try server.router.patch("/users", &patchUser);
+try router.get(allocator, "/users", &getUsers);
+try router.post(allocator, "/users", &createUser);
+try router.put(allocator, "/users", &updateUser);
+try router.delete(allocator, "/users", &deleteUser);
+try router.patch(allocator, "/users", &patchUser);
 ```
 
 ### Route Matching Rules
@@ -80,8 +82,6 @@ Volt matches routes using the following precedence rules:
 - Among parametric routes, patterns with more literal segments are matched first.
 - Duplicate parameter names in a single route pattern are rejected during registration.
 - If an exact path matches but does not support the requested method, Volt continues scanning matching parametric routes for a method match.
-- Volt returns **405 Method Not Allowed** only when at least one route pattern matches the path and none support the requested method.
-- 405 responses include an `Allow` header listing supported methods across matching route patterns.
 
 Examples:
 
@@ -104,6 +104,7 @@ All extractors can be used in two ways:
 - **extract.TypedQuery(T)**: Typed-query extractor exposing `result: QueryError!?*T`.
 - **extract.Header("name")**: Extracts a single HTTP header by name as `value: ?[]const u8`.
 - **extract.RouteParam("name")**: Extracts a named path segment from parametric routes (e.g., `/users/:id`) as `value: ?[]const u8`.
+- **extract.Form(T)**: Form extractor exposing `result: FormError!T`.
 - **extract.WebSocket**: Handles WebSocket upgrade requests and connection handoff via `result: WebSocketError!std.http.Server.WebSocket`.
 
 ### Manual Extraction With init(ctx)
@@ -238,8 +239,8 @@ Behavior notes:
 - RouteParam keeps valid encoded values as-is (for example `hello%20world`), so handlers can choose if/when to decode.
 
 ```zig
-try server.router.get("/users/:id", &getUserById);
-try server.router.get("/teams/:team_id/users/:user_id", &getTeamUser);
+try router.get(allocator, "/users/:id", &getUserById);
+try router.get(allocator, "/teams/:team_id/users/:user_id", &getTeamUser);
 
 fn getUserById(
     ctx: volt.Context,
@@ -372,17 +373,18 @@ const volt = @import("volt");
 const AppState = struct {};
 
 const Server = volt.Server(AppState);
+const AppRouter = volt.Router(AppState);
 
 pub fn main(init: std.process.Init) !void {
-    const state: AppState = .{};
-    var server = try Server.init(allocator, io, state);
-    defer server.deinit();
+    var server = try Server.init(init.io, .{}, .{});
+    var router: AppRouter = .init(init.gpa);
+    defer router.deinit(init.gpa);
 
-    try server.router.get("/", &indexHandler);
-    try server.router.post("/echo", &echoHandler);
+    try router.get(init.gpa, "/", &indexHandler);
+    try router.post(init.gpa, "/echo", &echoHandler);
 
     const address = try std.Io.net.IpAddress.parse("127.0.0.1", 8080);
-    try server.listen(address, .{});
+    try server.listen(init.gpa, address, &router);
 }
 
 fn indexHandler(ctx: volt.Context, state: *AppState) !volt.Response {
@@ -414,16 +416,17 @@ const volt = @import("volt");
 const AppState = struct {};
 
 const Server = volt.Server(AppState);
+const AppRouter = volt.Router(AppState);
 
 pub fn main(init: std.process.Init) !void {
-    const state: AppState = .{};
-    var server = try Server.init(allocator, io, state);
-    defer server.deinit();
+    var server = try Server.init(init.io, .{}, .{});
+    var router: AppRouter = .init(init.gpa);
+    defer router.deinit(init.gpa);
 
-    try server.router.get("/ws", &webSocketHandler);
+    try router.get(init.gpa, "/ws", &webSocketHandler);
 
     const address = try std.Io.net.IpAddress.parse("127.0.0.1", 8080);
-    try server.listen(address, .{});
+    try server.listen(init.gpa, address, &router);
 }
 
 fn webSocketHandler(ctx: volt.Context, state: *AppState, ws: volt.extract.WebSocket) !volt.Response {
@@ -492,7 +495,7 @@ Volt is built around several key components:
 - **Server**: Generic HTTP server with async request handling
 - **Router**: Type-safe routing with automatic parameter injection
 - **Context**: Request execution context with I/O and memory resources
-- **Extract**: Automatic parameter extraction (JSON, WebSocket, Query, TypedQuery, Header, RouteParam)
+- **Extract**: Automatic parameter extraction (JSON, WebSocket, Query, TypedQuery, Header, RouteParam, Form)
 - **Response**: Unified response type for HTTP and WebSocket responses
 
 ## Status & Roadmap
@@ -502,9 +505,6 @@ Volt is built around several key components:
 This is an early-stage library. While the core routing and WebSocket functionality is stable, expect breaking changes as the API matures.
 
 ### Planned Features
-
-- **Additional Extract Types**:
-  - Form data extraction
 
 - **Feature Flags**: Build-time feature flags in `build.zig` to include only selected features and reduce final binary size when unused features are disabled.
 

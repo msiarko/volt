@@ -16,11 +16,16 @@ const extract = @import("../extract/root.zig");
 /// const MyState = struct { db: Database };
 /// const MyRouter = Router(MyState);
 ///
+/// var router: MyRouter = .init(allocator);
+/// defer router.deinit(allocator);
+///
 /// fn myHandler(ctx: Context, state: *MyState, data: Json(MyStruct)) !Response {
 ///     // Parameters automatically extracted from request
 ///     _ = data; // JSON body deserialized to MyStruct
-///     return Response.ok();
+///     return Response.ok(ctx.request_allocator, null, null);
 /// }
+///
+/// try router.get(allocator, "/users", &myHandler);
 ///
 /// // Stateless handlers for Server(void) should omit state entirely.
 /// fn health(ctx: Context) !Response {
@@ -139,14 +144,9 @@ pub fn Router(comptime State: type) type {
         /// Registers a GET route handler.
         ///
         /// Parameters:
+        /// - `allocator`: Memory allocator used for route storage
         /// - `path`: Route path (e.g., "/users", "/api/v1/data")
         /// - `handler`: Function that handles GET requests to this path
-        ///
-        /// The handler function signature should be:
-        /// - for `Server(State)`: `fn(ctx: Context, state: *State, ...) !Response`
-        /// - for `Server(void)`: `fn(ctx: Context, ...) !Response`
-        ///
-        /// `*void` state parameters are rejected at compile time for `Server(void)`.
         pub fn get(self: *Self, allocator: Allocator, path: []const u8, handler: anytype) !void {
             try self.addRoute(allocator, .GET, path, makeHandler(handler));
         }
@@ -154,6 +154,7 @@ pub fn Router(comptime State: type) type {
         /// Registers a POST route handler.
         ///
         /// Parameters:
+        /// - `allocator`: Memory allocator used for route storage
         /// - `path`: Route path
         /// - `handler`: Function that handles POST requests to this path
         pub fn post(self: *Self, allocator: Allocator, path: []const u8, handler: anytype) !void {
@@ -163,6 +164,7 @@ pub fn Router(comptime State: type) type {
         /// Registers a PUT route handler.
         ///
         /// Parameters:
+        /// - `allocator`: Memory allocator used for route storage
         /// - `path`: Route path
         /// - `handler`: Function that handles PUT requests to this path
         pub fn put(self: *Self, allocator: Allocator, path: []const u8, handler: anytype) !void {
@@ -172,6 +174,7 @@ pub fn Router(comptime State: type) type {
         /// Registers a DELETE route handler.
         ///
         /// Parameters:
+        /// - `allocator`: Memory allocator used for route storage
         /// - `path`: Route path
         /// - `handler`: Function that handles DELETE requests to this path
         pub fn delete(self: *Self, allocator: Allocator, path: []const u8, handler: anytype) !void {
@@ -181,6 +184,7 @@ pub fn Router(comptime State: type) type {
         /// Registers a PATCH route handler.
         ///
         /// Parameters:
+        /// - `allocator`: Memory allocator used for route storage
         /// - `path`: Route path
         /// - `handler`: Function that handles PATCH requests to this path
         pub fn patch(self: *Self, allocator: Allocator, path: []const u8, handler: anytype) !void {
