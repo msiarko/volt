@@ -1,6 +1,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
+const AllocatorError = std.mem.Allocator.Error;
 const Request = std.http.Server.Request;
 const StructField = std.builtin.Type.StructField;
 
@@ -9,8 +10,9 @@ const utils = @import("utils.zig");
 
 const EXTRACTOR_ID: []const u8 = "VOLT_ROUTE_PARAM_EXTRACTOR";
 
-fn extract(comptime name: []const u8, route_pattern: ?[]const u8, req: *Request) RouteParam(name) {
-    return .{ .value = resolveValue(name, route_pattern, req.head.target) };
+fn extract(comptime name: []const u8, arena: Allocator, route_pattern: ?[]const u8, req: *Request) AllocatorError!?[]const u8 {
+    const decoded_target = try utils.decodeUrl(arena, req.head.target);
+    return resolveValue(name, route_pattern, decoded_target);
 }
 
 fn resolveValue(name: []const u8, route_pattern: ?[]const u8, req_target: []const u8) ?[]const u8 {
@@ -25,7 +27,6 @@ fn resolveValue(name: []const u8, route_pattern: ?[]const u8, req_target: []cons
         const req_seg = req_it.next() orelse return null;
         if (pat_seg.len > 0 and pat_seg[0] == ':') {
             if (std.mem.eql(u8, pat_seg[1..], name)) {
-                if (!isValidEncodedPathSegment(req_seg)) return null;
                 return req_seg;
             }
         } else if (!std.mem.eql(u8, pat_seg, req_seg)) {
@@ -42,33 +43,6 @@ fn stripQuery(target: []const u8) []const u8 {
     }
 
     return target;
-}
-
-fn isHexDigit(c: u8) bool {
-    return switch (c) {
-        '0'...'9', 'a'...'f', 'A'...'F' => true,
-        else => false,
-    };
-}
-
-fn isValidEncodedPathSegment(seg: []const u8) bool {
-    var i: usize = 0;
-    while (i < seg.len) {
-        const c = seg[i];
-
-        if (std.ascii.isWhitespace(c) or c < 0x20 or c == 0x7f) return false;
-
-        if (c == '%') {
-            if (i + 2 >= seg.len) return false;
-            if (!isHexDigit(seg[i + 1]) or !isHexDigit(seg[i + 2])) return false;
-            i += 3;
-            continue;
-        }
-
-        i += 1;
-    }
-
-    return true;
 }
 
 /// Creates a 'RouteParam' extractor type
@@ -90,15 +64,13 @@ fn isValidEncodedPathSegment(seg: []const u8) bool {
 pub fn RouteParam(comptime name: []const u8) type {
     assert(name.len > 0);
     return struct {
-        const Self = @This();
-
         pub const ID: []const u8 = EXTRACTOR_ID;
         pub const PARAM_NAME: []const u8 = name;
 
-        value: ?[]const u8,
+        result: AllocatorError!?[]const u8,
 
-        pub fn init(ctx: Context) Self {
-            return extract(name, ctx.request);
+        pub fn init(ctx: Context) AllocatorError!?[]const u8 {
+            return extract(name, ctx.request_allocator, ctx.request);
         }
     };
 }
@@ -110,9 +82,9 @@ pub const Resolver = struct {
     }
 
     pub fn resolve(comptime Extractor: type, arena: Allocator, route_pattern: ?[]const u8, req: *Request) Extractor {
-        _ = arena;
         comptime assert(@hasDecl(Extractor, "PARAM_NAME"));
-        return extract(@field(Extractor, "PARAM_NAME"), route_pattern, req);
+        const result = extract(@field(Extractor, "PARAM_NAME"), arena, route_pattern, req);
+        return .{ .result = result };
     }
 };
 
@@ -121,7 +93,10 @@ const Reader = std.Io.Reader;
 const Writer = std.Io.Writer;
 const testing = std.testing;
 
-test "RouteParam.init returns value when key matches" {
+test "extract returns value when key matches" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
     const req_bytes = "GET /users/42 HTTP/1.1\r\n\r\n";
     var stream_buf_reader = Reader.fixed(req_bytes);
     var write_buffer: [4096]u8 = undefined;
@@ -129,11 +104,14 @@ test "RouteParam.init returns value when key matches" {
     var http_server = Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const result = extract("id", "/users/:id", &http_req);
-    try testing.expectEqualStrings("42", result.value.?);
+    const result = try extract("id", arena.allocator(), "/users/:id", &http_req);
+    try testing.expectEqualStrings("42", result.?);
 }
 
-test "RouteParam.init returns null when key is absent" {
+test "extract returns null when key is absent" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
     const req_bytes = "GET /users/alice HTTP/1.1\r\n\r\n";
     var stream_buf_reader = Reader.fixed(req_bytes);
     var write_buffer: [4096]u8 = undefined;
@@ -141,11 +119,14 @@ test "RouteParam.init returns null when key is absent" {
     var http_server = Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const result = extract("id", "/accounts/:name", &http_req);
-    try testing.expect(result.value == null);
+    const result = try extract("id", arena.allocator(), "/accounts/:name", &http_req);
+    try testing.expect(result == null);
 }
 
-test "RouteParam.init resolves multiple params from one pattern" {
+test "extract resolves multiple params from one pattern" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
     const req_bytes = "GET /teams/abc/users/42 HTTP/1.1\r\n\r\n";
     var stream_buf_reader = Reader.fixed(req_bytes);
     var write_buffer: [4096]u8 = undefined;
@@ -153,14 +134,18 @@ test "RouteParam.init resolves multiple params from one pattern" {
     var http_server = Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const team_id = extract("team_id", "/teams/:team_id/users/:user_id", &http_req);
-    const user_id = extract("user_id", "/teams/:team_id/users/:user_id", &http_req);
+    const allocator = arena.allocator();
+    const team_id = try extract("team_id", allocator, "/teams/:team_id/users/:user_id", &http_req);
+    const user_id = try extract("user_id", allocator, "/teams/:team_id/users/:user_id", &http_req);
 
-    try testing.expectEqualStrings("abc", team_id.value.?);
-    try testing.expectEqualStrings("42", user_id.value.?);
+    try testing.expectEqualStrings("abc", team_id.?);
+    try testing.expectEqualStrings("42", user_id.?);
 }
 
-test "RouteParam.init keeps valid encoded segment" {
+test "extract returns decoded segment" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
     const req_bytes = "GET /blocks/hello%20world HTTP/1.1\r\n\r\n";
     var stream_buf_reader = Reader.fixed(req_bytes);
     var write_buffer: [4096]u8 = undefined;
@@ -168,11 +153,14 @@ test "RouteParam.init keeps valid encoded segment" {
     var http_server = Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const result = extract("name", "/blocks/:name", &http_req);
-    try testing.expectEqualStrings("hello%20world", result.value.?);
+    const result = try extract("name", arena.allocator(), "/blocks/:name", &http_req);
+    try testing.expectEqualStrings("hello world", result.?);
 }
 
-test "RouteParam.init rejects malformed encoded segment" {
+test "extract returns original segment on malformed percent escape" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
     const req_bytes = "GET /blocks/hello%2 HTTP/1.1\r\n\r\n";
     var stream_buf_reader = Reader.fixed(req_bytes);
     var write_buffer: [4096]u8 = undefined;
@@ -180,11 +168,14 @@ test "RouteParam.init rejects malformed encoded segment" {
     var http_server = Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const result = extract("name", "/blocks/:name", &http_req);
-    try testing.expectEqual(null, result.value);
+    const result = try extract("name", arena.allocator(), "/blocks/:name", &http_req);
+    try testing.expectEqualStrings("hello%2", result.?);
 }
 
-test "RouteParam.extract returns null when route pattern is missing" {
+test "extract returns null when route pattern is missing" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
     const req_bytes = "GET /users/42 HTTP/1.1\r\n\r\n";
     var stream_buf_reader = Reader.fixed(req_bytes);
     var write_buffer: [4096]u8 = undefined;
@@ -192,11 +183,14 @@ test "RouteParam.extract returns null when route pattern is missing" {
     var http_server = Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const result = extract("id", null, &http_req);
-    try testing.expectEqual(null, result.value);
+    const result = try extract("id", arena.allocator(), null, &http_req);
+    try testing.expectEqual(null, result);
 }
 
-test "RouteParam.extract strips query from target and route pattern" {
+test "extract strips query from target and route pattern" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
     const req_bytes = "GET /users/42?verbose=true HTTP/1.1\r\n\r\n";
     var stream_buf_reader = Reader.fixed(req_bytes);
     var write_buffer: [4096]u8 = undefined;
@@ -204,11 +198,11 @@ test "RouteParam.extract strips query from target and route pattern" {
     var http_server = Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const result = extract("id", "/users/:id?unused=true", &http_req);
-    try testing.expectEqualStrings("42", result.value.?);
+    const result = try extract("id", arena.allocator(), "/users/:id?unused=true", &http_req);
+    try testing.expectEqualStrings("42", result.?);
 }
 
-test "RouteParam.Resolver.matches identifies route param extractor types" {
+test "Resolver.matches identifies route param extractor types" {
     const OtherExtractor = struct {
         pub const ID: []const u8 = "OTHER_EXTRACTOR";
         pub const PARAM_NAME: []const u8 = "id";
@@ -219,7 +213,10 @@ test "RouteParam.Resolver.matches identifies route param extractor types" {
     try testing.expect(!Resolver.matches(OtherExtractor));
 }
 
-test "RouteParam.Resolver.resolve uses route pattern" {
+test "Resolver.resolve uses route pattern" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
     const req_bytes = "GET /users/42 HTTP/1.1\r\n\r\n";
     var stream_buf_reader = Reader.fixed(req_bytes);
     var write_buffer: [4096]u8 = undefined;
@@ -227,6 +224,6 @@ test "RouteParam.Resolver.resolve uses route pattern" {
     var http_server = Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const resolved = Resolver.resolve(RouteParam("id"), testing.allocator, "/users/:id", &http_req);
-    try testing.expectEqualStrings("42", resolved.value.?);
+    const resolved = Resolver.resolve(RouteParam("id"), arena.allocator(), "/users/:id", &http_req);
+    try testing.expectEqualStrings("42", (try resolved.result).?);
 }

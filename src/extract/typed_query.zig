@@ -35,14 +35,14 @@ fn extract(comptime T: type, arena: Allocator, req: *Request) TypedQueryError!?*
     }
 
     while (query_it.next()) |entry| {
+        const value = entry.value orelse continue;
+        const key = try utils.decodeUrl(arena, entry.key);
+
         inline for (fields) |field| {
-            const key = try utils.decodeUrl(arena, entry.key);
             if (std.ascii.eqlIgnoreCase(key, field.name)) {
-                if (entry.value) |raw_value| {
-                    const value = try utils.decodeUrl(arena, raw_value);
-                    const field_type = @typeInfo(field.type).optional.child;
-                    @field(typed_query, field.name) = try utils.parse(field_type, value);
-                }
+                const decoded_value = try utils.decodeUrl(arena, value);
+                const field_type = @typeInfo(field.type).optional.child;
+                @field(typed_query, field.name) = try utils.parse(field_type, decoded_value);
             }
         }
     }

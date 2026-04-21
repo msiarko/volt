@@ -24,13 +24,13 @@ const FormError = utils.ParseError || AllocatorError || ReadAllocError || error{
 fn extractMultipartFormData(
     comptime T: type,
     arena: Allocator,
-    splitter: []const u8,
+    delimiter: []const u8,
     content: []const u8,
 ) FormError!*T {
     const out: *T = try arena.create(T);
     errdefer arena.destroy(out);
 
-    var body_it = std.mem.splitSequence(u8, content, splitter);
+    var body_it = std.mem.splitSequence(u8, content, delimiter);
     while (body_it.next()) |part| {
         const part_trimmed = std.mem.trim(u8, part, "\r\n");
         if (part_trimmed.len == 0 or std.mem.eql(u8, "--", part_trimmed)) continue;
@@ -106,12 +106,13 @@ fn extract(comptime T: type, arena: Allocator, req: *Request) FormError!*T {
 
     const content = try reader.readAlloc(arena, content_length);
     if (std.mem.startsWith(u8, content_type, "multipart/form-data")) {
-        const boundary_pos = std.mem.findLast(u8, content_type, "boundary=") orelse return FormError.MissingBoundary;
-        const boundary = std.mem.trim(u8, content_type[boundary_pos + 9 ..], "\r\n");
-        const splitter = try std.fmt.allocPrint(arena, "--{s}", .{boundary});
-        defer arena.free(splitter);
+        const boundary_prefix = "boundary=";
+        const boundary_pos = std.mem.findLast(u8, content_type, boundary_prefix) orelse return FormError.MissingBoundary;
+        const boundary = std.mem.trim(u8, content_type[boundary_pos + boundary_prefix.len ..], "\r\n");
+        const delimeter = try std.fmt.allocPrint(arena, "--{s}", .{boundary});
+        defer arena.free(delimeter);
 
-        return extractMultipartFormData(T, arena, splitter, content);
+        return extractMultipartFormData(T, arena, delimeter, content);
     } else if (std.mem.eql(u8, content_type, "application/x-www-form-urlencoded")) {
         return extractUrlEncodedFormData(T, arena, content);
     } else {

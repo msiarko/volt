@@ -14,14 +14,10 @@ fn extract(comptime name: []const u8, arena: Allocator, req: *Request) Allocator
     var query_it = utils.queryIterator(req.head.target) orelse return null;
     while (query_it.next()) |entry| {
         const value = entry.value orelse continue;
-        const key = try arena.alloc(u8, entry.key.len);
-        @memcpy(key, entry.key);
-        const decoded_key = std.Uri.percentDecodeInPlace(key);
-        if (std.ascii.eqlIgnoreCase(decoded_key, name)) {
-            const encoded = try arena.alloc(u8, value.len);
-            @memcpy(encoded, value);
-            const decoded = std.Uri.percentDecodeInPlace(encoded);
-            return decoded;
+        const key = try utils.decodeUrl(arena, entry.key);
+        if (std.ascii.eqlIgnoreCase(key, name)) {
+            const decoded_value = try utils.decodeUrl(arena, value);
+            return decoded_value;
         }
     }
 

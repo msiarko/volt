@@ -150,7 +150,7 @@ test "resolveParams resolves context field and extractor parameters" {
     );
 
     try testing.expectEqual(@intFromPtr(ctx.request), @intFromPtr(params[0].request));
-    try testing.expectEqualStrings("42", params[1].value.?);
+    try testing.expectEqualStrings("42", (try params[1].result).?);
     try testing.expectEqualStrings("alice", (try params[2].result).?);
     try testing.expectEqualStrings("req-1", params[3].value.?);
 }
