@@ -1,5 +1,6 @@
 const std = @import("std");
 const Request = std.http.Server.Request;
+const Allocator = std.mem.Allocator;
 const Response = @import("response.zig").Response;
 const Context = @import("context.zig").Context;
 const extract = @import("../extract/root.zig");
@@ -30,7 +31,6 @@ pub fn Router(comptime State: type) type {
     return struct {
         const Self = @This();
 
-        allocator: std.mem.Allocator,
         routes: std.StringHashMap(Route),
         parametric_routes: std.ArrayList(ParametricRoute),
 
@@ -109,9 +109,8 @@ pub fn Router(comptime State: type) type {
         /// - `allocator`: Memory allocator for route storage
         ///
         /// Returns: Initialized router ready to register routes
-        pub fn init(allocator: std.mem.Allocator) Self {
+        pub fn init(allocator: Allocator) Self {
             return .{
-                .allocator = allocator,
                 .routes = .init(allocator),
                 .parametric_routes = .empty,
             };
@@ -121,20 +120,20 @@ pub fn Router(comptime State: type) type {
         ///
         /// This method should be called when the router is no longer needed
         /// to free all allocated route handlers and mappings.
-        pub fn deinit(self: *Self) void {
+        pub fn deinit(self: *Self, allocator: Allocator) void {
             var it = self.routes.iterator();
             while (it.next()) |entry| {
                 entry.value_ptr.handlers.deinit();
-                self.allocator.free(entry.key_ptr.*);
+                allocator.free(entry.key_ptr.*);
             }
             self.routes.deinit();
 
             for (self.parametric_routes.items) |*route| {
                 route.entry.handlers.deinit();
-                self.allocator.free(route.segments);
-                self.allocator.free(route.pattern);
+                allocator.free(route.segments);
+                allocator.free(route.pattern);
             }
-            self.parametric_routes.deinit(self.allocator);
+            self.parametric_routes.deinit(allocator);
         }
 
         /// Registers a GET route handler.
@@ -148,8 +147,8 @@ pub fn Router(comptime State: type) type {
         /// - for `Server(void)`: `fn(ctx: Context, ...) !Response`
         ///
         /// `*void` state parameters are rejected at compile time for `Server(void)`.
-        pub fn get(self: *Self, path: []const u8, handler: anytype) !void {
-            try self.addRoute(.GET, path, makeHandler(handler));
+        pub fn get(self: *Self, allocator: Allocator, path: []const u8, handler: anytype) !void {
+            try self.addRoute(allocator, .GET, path, makeHandler(handler));
         }
 
         /// Registers a POST route handler.
@@ -157,8 +156,8 @@ pub fn Router(comptime State: type) type {
         /// Parameters:
         /// - `path`: Route path
         /// - `handler`: Function that handles POST requests to this path
-        pub fn post(self: *Self, path: []const u8, handler: anytype) !void {
-            try self.addRoute(.POST, path, makeHandler(handler));
+        pub fn post(self: *Self, allocator: Allocator, path: []const u8, handler: anytype) !void {
+            try self.addRoute(allocator, .POST, path, makeHandler(handler));
         }
 
         /// Registers a PUT route handler.
@@ -166,8 +165,8 @@ pub fn Router(comptime State: type) type {
         /// Parameters:
         /// - `path`: Route path
         /// - `handler`: Function that handles PUT requests to this path
-        pub fn put(self: *Self, path: []const u8, handler: anytype) !void {
-            try self.addRoute(.PUT, path, makeHandler(handler));
+        pub fn put(self: *Self, allocator: Allocator, path: []const u8, handler: anytype) !void {
+            try self.addRoute(allocator, .PUT, path, makeHandler(handler));
         }
 
         /// Registers a DELETE route handler.
@@ -175,8 +174,8 @@ pub fn Router(comptime State: type) type {
         /// Parameters:
         /// - `path`: Route path
         /// - `handler`: Function that handles DELETE requests to this path
-        pub fn delete(self: *Self, path: []const u8, handler: anytype) !void {
-            try self.addRoute(.DELETE, path, makeHandler(handler));
+        pub fn delete(self: *Self, allocator: Allocator, path: []const u8, handler: anytype) !void {
+            try self.addRoute(allocator, .DELETE, path, makeHandler(handler));
         }
 
         /// Registers a PATCH route handler.
@@ -184,11 +183,11 @@ pub fn Router(comptime State: type) type {
         /// Parameters:
         /// - `path`: Route path
         /// - `handler`: Function that handles PATCH requests to this path
-        pub fn patch(self: *Self, path: []const u8, handler: anytype) !void {
-            try self.addRoute(.PATCH, path, makeHandler(handler));
+        pub fn patch(self: *Self, allocator: Allocator, path: []const u8, handler: anytype) !void {
+            try self.addRoute(allocator, .PATCH, path, makeHandler(handler));
         }
 
-        fn addRoute(self: *Self, method: std.http.Method, path: []const u8, handler: Handler) !void {
+        fn addRoute(self: *Self, allocator: Allocator, method: std.http.Method, path: []const u8, handler: Handler) !void {
             if (isParametricPath(path)) {
                 for (self.parametric_routes.items) |*route| {
                     if (std.mem.eql(u8, route.pattern, path)) {
@@ -197,13 +196,13 @@ pub fn Router(comptime State: type) type {
                     }
                 }
 
-                const parsed = try parseSegments(self.allocator, path);
-                errdefer self.allocator.free(parsed.segments);
+                const parsed = try parseSegments(allocator, path);
+                errdefer allocator.free(parsed.segments);
 
-                const owned_pattern = try self.allocator.dupe(u8, path);
-                errdefer self.allocator.free(owned_pattern);
+                const owned_pattern = try allocator.dupe(u8, path);
+                errdefer allocator.free(owned_pattern);
 
-                var entry = Route{ .handlers = .init(self.allocator) };
+                var entry: Route = .{ .handlers = .init(allocator) };
                 errdefer entry.handlers.deinit();
 
                 try entry.handlers.put(method, handler);
@@ -216,7 +215,7 @@ pub fn Router(comptime State: type) type {
                     }
                 }
 
-                try self.parametric_routes.insert(self.allocator, insert_index, .{
+                try self.parametric_routes.insert(allocator, insert_index, .{
                     .pattern = owned_pattern,
                     .segments = parsed.segments,
                     .literal_count = parsed.literal_count,
@@ -226,10 +225,10 @@ pub fn Router(comptime State: type) type {
                 if (self.routes.getPtr(path)) |route| {
                     try route.handlers.put(method, handler);
                 } else {
-                    const owned_path = try self.allocator.dupe(u8, path);
-                    errdefer self.allocator.free(owned_path);
+                    const owned_path = try allocator.dupe(u8, path);
+                    errdefer allocator.free(owned_path);
 
-                    var entry = Route{ .handlers = .init(self.allocator) };
+                    var entry: Route = .{ .handlers = .init(allocator) };
                     errdefer entry.handlers.deinit();
 
                     try entry.handlers.put(method, handler);
@@ -248,7 +247,7 @@ pub fn Router(comptime State: type) type {
             return false;
         }
 
-        fn parseSegments(allocator: std.mem.Allocator, pattern: []const u8) !struct { segments: []Segment, literal_count: usize } {
+        fn parseSegments(allocator: Allocator, pattern: []const u8) !struct { segments: []Segment, literal_count: usize } {
             const path = if (pattern.len > 0 and pattern[0] == '/') pattern[1..] else pattern;
             var it = std.mem.splitScalar(u8, path, '/');
             var list: std.ArrayListUnmanaged(Segment) = .empty;

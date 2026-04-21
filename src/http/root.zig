@@ -1,4 +1,5 @@
 pub const Server = @import("server.zig").Server;
+pub const Router = @import("router.zig").Router;
 pub const Context = @import("context.zig").Context;
 pub const Response = @import("response.zig").Response;
 

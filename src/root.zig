@@ -29,6 +29,7 @@ pub const extract = struct {
 };
 
 pub const Server = http.Server;
+pub const Router = http.Router;
 pub const Context = http.Context;
 pub const Response = http.Response;
 

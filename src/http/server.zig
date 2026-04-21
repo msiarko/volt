@@ -1,6 +1,7 @@
 const std = @import("std");
 const HttpRequest = std.http.Server.Request;
-const ServerRouter = @import("router.zig").Router;
+const Allocator = std.mem.Allocator;
+const Router = @import("router.zig").Router;
 const IpAddress = std.Io.net.IpAddress;
 const ListenOptions = std.Io.net.IpAddress.ListenOptions;
 const response = @import("response.zig");
@@ -39,16 +40,13 @@ pub const ServerOptions = struct {
 pub fn Server(comptime State: type) type {
     return struct {
         const Self = @This();
-        const Router = ServerRouter(State);
 
         const ShutdownWait = union(enum) {
             tasks_done: std.Io.Cancelable!void,
             timeout: std.Io.Cancelable!void,
         };
 
-        router: Router,
         io: std.Io,
-        allocator: std.mem.Allocator,
         state: State,
         options: ServerOptions,
 
@@ -60,22 +58,12 @@ pub fn Server(comptime State: type) type {
         /// - `state`: Initial application state
         ///
         /// Returns: A new Server instance ready to listen for connections
-        pub fn init(allocator: std.mem.Allocator, io: std.Io, state: State, options: ServerOptions) !Self {
+        pub fn init(io: std.Io, state: State, options: ServerOptions) !Self {
             return .{
-                .router = .init(allocator),
                 .io = io,
-                .allocator = allocator,
                 .state = state,
                 .options = options,
             };
-        }
-
-        /// Cleans up server resources.
-        ///
-        /// This method should be called when the server is no longer needed
-        /// to free any allocated resources, particularly the router.
-        pub fn deinit(self: *Self) void {
-            self.router.deinit();
         }
 
         /// Starts listening for HTTP connections on the specified address.
@@ -88,7 +76,7 @@ pub fn Server(comptime State: type) type {
         /// - `address`: Network address to bind to (IP and port)
         ///
         /// The server will continue running until interrupted or an error occurs.
-        pub fn listen(self: *Self, address: IpAddress) !void {
+        pub fn listen(self: *Self, allocator: Allocator, address: IpAddress, router: *const Router(State)) !void {
             var server = try IpAddress.listen(
                 &address,
                 self.io,
@@ -105,7 +93,7 @@ pub fn Server(comptime State: type) type {
             try fixed_writer.flush();
 
             std.log.info("Server is listening on http://{s}", .{buffer[0..fixed_writer.end]});
-            try self.acceptConnections(&server, &tasks);
+            try self.acceptConnections(allocator, router, &server, &tasks);
             const graceful_shutdown_timeout: std.Io.Clock.Duration = .{
                 .raw = std.Io.Duration.fromSeconds(@intCast(self.options.shutdown_timeout_seconds)),
                 .clock = .real,
@@ -113,13 +101,13 @@ pub fn Server(comptime State: type) type {
             try self.gracefulShutdown(&tasks, graceful_shutdown_timeout);
         }
 
-        fn acceptConnections(self: *Self, server: *std.Io.net.Server, tasks: *std.Io.Group) !void {
+        fn acceptConnections(self: *Self, allocator: Allocator, router: *const Router(State), server: *std.Io.net.Server, tasks: *std.Io.Group) !void {
             while (true) {
                 const conn = server.accept(self.io) catch |err| switch (err) {
                     error.Canceled => return,
                     else => return err,
                 };
-                tasks.async(self.io, handleConnection, .{ self, conn });
+                tasks.async(self.io, handleConnection, .{ self, allocator, router, conn });
             }
         }
 
@@ -154,7 +142,7 @@ pub fn Server(comptime State: type) type {
             }
         }
 
-        fn handleConnection(self: *Self, conn: std.Io.net.Stream) void {
+        fn handleConnection(self: *Self, allocator: Allocator, router: *const Router(State), conn: std.Io.net.Stream) void {
             defer conn.close(self.io);
 
             var read_buffer: [4096]u8 = undefined;
@@ -170,7 +158,7 @@ pub fn Server(comptime State: type) type {
                     break;
                 };
 
-                var arena = std.heap.ArenaAllocator.init(self.allocator);
+                var arena = std.heap.ArenaAllocator.init(allocator);
                 defer arena.deinit();
 
                 const req_allocator = arena.allocator();
@@ -180,14 +168,14 @@ pub fn Server(comptime State: type) type {
                     .request = &req,
                 };
 
-                handleRequest(&self.router, ctx, &self.state, &req) catch |err| {
+                handleRequest(router, ctx, &self.state, &req) catch |err| {
                     if (err == error.ConnectionClose) break;
                     req.respond(@errorName(err), .{ .status = .internal_server_error }) catch continue;
                 };
             }
         }
 
-        fn handleRequest(router: *const Router, ctx: Context, state: *State, req: *HttpRequest) !void {
+        fn handleRequest(router: *const Router(State), ctx: Context, state: *State, req: *HttpRequest) !void {
             const target = normalizedTarget(req.head.target);
             const method = req.head.method;
             var path_matched = false;
@@ -219,7 +207,7 @@ pub fn Server(comptime State: type) type {
             return respondNotFound(req);
         }
 
-        fn executeHandler(handler: Router.Handler, ctx: Context, state: *State, pattern: ?[]const u8, req: *HttpRequest) !void {
+        fn executeHandler(handler: Router(State).Handler, ctx: Context, state: *State, pattern: ?[]const u8, req: *HttpRequest) !void {
             const res = handler.execute(ctx, state, pattern, req) catch |err| {
                 if (utils.isMemberOfErrorSet(extract.WebSocketError, err)) return;
                 try req.respond(@errorName(err), .{ .status = .internal_server_error });
@@ -283,11 +271,11 @@ pub fn Server(comptime State: type) type {
 }
 
 test "handleRequest returns 404 for unknown route" {
-    const TestRouter = ServerRouter(void);
+    const TestRouter = Router(void);
     const TestServer = Server(void);
 
     var router: TestRouter = .init(std.testing.allocator);
-    defer router.deinit();
+    defer router.deinit(std.testing.allocator);
 
     const req_bytes = "GET /missing HTTP/1.1\r\n\r\n";
     var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
@@ -312,11 +300,11 @@ test "handleRequest returns 404 for unknown route" {
 }
 
 test "handleRequest returns 405 for method mismatch" {
-    const TestRouter = ServerRouter(void);
+    const TestRouter = Router(void);
     const TestServer = Server(void);
 
     var router: TestRouter = .init(std.testing.allocator);
-    defer router.deinit();
+    defer router.deinit(std.testing.allocator);
 
     const handlers = struct {
         fn postOnly(ctx: Context) !Response {
@@ -324,7 +312,7 @@ test "handleRequest returns 405 for method mismatch" {
         }
     };
 
-    try router.post("/users", &handlers.postOnly);
+    try router.post(std.testing.allocator, "/users", &handlers.postOnly);
 
     const req_bytes = "GET /users HTTP/1.1\r\n\r\n";
     var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
@@ -350,11 +338,11 @@ test "handleRequest returns 405 for method mismatch" {
 }
 
 test "handleRequest returns 405 with Allow header for parametric route mismatch" {
-    const TestRouter = ServerRouter(void);
+    const TestRouter = Router(void);
     const TestServer = Server(void);
 
     var router: TestRouter = .init(std.testing.allocator);
-    defer router.deinit();
+    defer router.deinit(std.testing.allocator);
 
     const handlers = struct {
         fn putOnly(ctx: Context, id: extract.RouteParam("id")) !Response {
@@ -363,7 +351,7 @@ test "handleRequest returns 405 with Allow header for parametric route mismatch"
         }
     };
 
-    try router.put("/users/:id", &handlers.putOnly);
+    try router.put(std.testing.allocator, "/users/:id", &handlers.putOnly);
 
     const req_bytes = "GET /users/42 HTTP/1.1\r\n\r\n";
     var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
@@ -389,11 +377,11 @@ test "handleRequest returns 405 with Allow header for parametric route mismatch"
 }
 
 test "handleRequest falls back to parametric method when exact path lacks method" {
-    const TestRouter = ServerRouter(void);
+    const TestRouter = Router(void);
     const TestServer = Server(void);
 
     var router: TestRouter = .init(std.testing.allocator);
-    defer router.deinit();
+    defer router.deinit(std.testing.allocator);
 
     const handlers = struct {
         fn exactPost(ctx: Context) !Response {
@@ -406,8 +394,8 @@ test "handleRequest falls back to parametric method when exact path lacks method
         }
     };
 
-    try router.post("/users/me", &handlers.exactPost);
-    try router.get("/users/:id", &handlers.paramGet);
+    try router.post(std.testing.allocator, "/users/me", &handlers.exactPost);
+    try router.get(std.testing.allocator, "/users/:id", &handlers.paramGet);
 
     const req_bytes = "GET /users/me HTTP/1.1\r\n\r\n";
     var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
@@ -436,11 +424,11 @@ test "handleRequest falls back to parametric method when exact path lacks method
 }
 
 test "handleRequest returns combined Allow header for overlapping path matches" {
-    const TestRouter = ServerRouter(void);
+    const TestRouter = Router(void);
     const TestServer = Server(void);
 
     var router: TestRouter = .init(std.testing.allocator);
-    defer router.deinit();
+    defer router.deinit(std.testing.allocator);
 
     const handlers = struct {
         fn exactPost(ctx: Context) !Response {
@@ -453,8 +441,8 @@ test "handleRequest returns combined Allow header for overlapping path matches" 
         }
     };
 
-    try router.post("/users/me", &handlers.exactPost);
-    try router.put("/users/:id", &handlers.paramPut);
+    try router.post(std.testing.allocator, "/users/me", &handlers.exactPost);
+    try router.put(std.testing.allocator, "/users/:id", &handlers.paramPut);
 
     const req_bytes = "GET /users/me HTTP/1.1\r\n\r\n";
     var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
@@ -481,11 +469,11 @@ test "handleRequest returns combined Allow header for overlapping path matches" 
 }
 
 test "handleRequest ignores websocket extractor errors" {
-    const TestRouter = ServerRouter(void);
+    const TestRouter = Router(void);
     const TestServer = Server(void);
 
     var router: TestRouter = .init(std.testing.allocator);
-    defer router.deinit();
+    defer router.deinit(std.testing.allocator);
 
     const handlers = struct {
         fn noop(socket: *std.http.Server.WebSocket) !void {
@@ -498,7 +486,7 @@ test "handleRequest ignores websocket extractor errors" {
         }
     };
 
-    try router.get("/ws", &handlers.websocketRoute);
+    try router.get(std.testing.allocator, "/ws", &handlers.websocketRoute);
 
     const req_bytes = "GET /ws HTTP/1.1\r\n\r\n";
     var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
@@ -520,11 +508,11 @@ test "handleRequest ignores websocket extractor errors" {
 }
 
 test "handleRequest prefers exact route over parametric overlap" {
-    const TestRouter = ServerRouter(void);
+    const TestRouter = Router(void);
     const TestServer = Server(void);
 
     var router: TestRouter = .init(std.testing.allocator);
-    defer router.deinit();
+    defer router.deinit(std.testing.allocator);
 
     const handlers = struct {
         fn exact(ctx: Context) !Response {
@@ -537,8 +525,8 @@ test "handleRequest prefers exact route over parametric overlap" {
         }
     };
 
-    try router.get("/users/:id", &handlers.param);
-    try router.get("/users/me", &handlers.exact);
+    try router.get(std.testing.allocator, "/users/:id", &handlers.param);
+    try router.get(std.testing.allocator, "/users/me", &handlers.exact);
 
     const req_bytes = "GET /users/me HTTP/1.1\r\n\r\n";
     var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
@@ -566,11 +554,11 @@ test "handleRequest prefers exact route over parametric overlap" {
 }
 
 test "handleRequest applies parametric precedence by literal segments" {
-    const TestRouter = ServerRouter(void);
+    const TestRouter = Router(void);
     const TestServer = Server(void);
 
     var router: TestRouter = .init(std.testing.allocator);
-    defer router.deinit();
+    defer router.deinit(std.testing.allocator);
 
     const handlers = struct {
         fn generic(ctx: Context, entity: extract.RouteParam("entity"), id: extract.RouteParam("id")) !Response {
@@ -585,8 +573,8 @@ test "handleRequest applies parametric precedence by literal segments" {
         }
     };
 
-    try router.get("/:entity/:id", &handlers.generic);
-    try router.get("/users/:id", &handlers.users);
+    try router.get(std.testing.allocator, "/:entity/:id", &handlers.generic);
+    try router.get(std.testing.allocator, "/users/:id", &handlers.users);
 
     const req_bytes = "GET /users/42 HTTP/1.1\r\n\r\n";
     var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
@@ -614,9 +602,9 @@ test "handleRequest applies parametric precedence by literal segments" {
 }
 
 test "router rejects duplicate placeholder names in same route" {
-    const TestRouter = ServerRouter(void);
+    const TestRouter = Router(void);
     var router: TestRouter = .init(std.testing.allocator);
-    defer router.deinit();
+    defer router.deinit(std.testing.allocator);
 
     const handlers = struct {
         fn duplicate(ctx: Context, id: extract.RouteParam("id")) !Response {
@@ -627,16 +615,16 @@ test "router rejects duplicate placeholder names in same route" {
 
     try std.testing.expectError(
         error.DuplicateRouteParamName,
-        router.get("/users/:id/orders/:id", &handlers.duplicate),
+        router.get(std.testing.allocator, "/users/:id/orders/:id", &handlers.duplicate),
     );
 }
 
 test "literal colon segment is treated as exact route" {
-    const TestRouter = ServerRouter(void);
+    const TestRouter = Router(void);
     const TestServer = Server(void);
 
     var router: TestRouter = .init(std.testing.allocator);
-    defer router.deinit();
+    defer router.deinit(std.testing.allocator);
 
     const handlers = struct {
         fn literal(ctx: Context) !Response {
@@ -644,7 +632,7 @@ test "literal colon segment is treated as exact route" {
         }
     };
 
-    try router.get("/time/10:30", &handlers.literal);
+    try router.get(std.testing.allocator, "/time/10:30", &handlers.literal);
 
     const req_bytes = "GET /time/10:30 HTTP/1.1\r\n\r\n";
     var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
@@ -671,11 +659,11 @@ test "literal colon segment is treated as exact route" {
 }
 
 test "router duplicates route path keys on registration" {
-    const TestRouter = ServerRouter(void);
+    const TestRouter = Router(void);
     const TestServer = Server(void);
 
     var router: TestRouter = .init(std.testing.allocator);
-    defer router.deinit();
+    defer router.deinit(std.testing.allocator);
 
     const handlers = struct {
         fn owned(ctx: Context) !Response {
@@ -684,7 +672,7 @@ test "router duplicates route path keys on registration" {
     };
 
     var dynamic_path = [_]u8{ '/', 'd', 'y', 'n' };
-    try router.get(dynamic_path[0..], &handlers.owned);
+    try router.get(std.testing.allocator, dynamic_path[0..], &handlers.owned);
     dynamic_path[1] = 'x';
 
     const req_bytes = "GET /dyn HTTP/1.1\r\n\r\n";
