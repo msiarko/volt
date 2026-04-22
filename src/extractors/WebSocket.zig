@@ -1,22 +1,3 @@
-//! Creates a `WebSocket` extractor.
-//!
-//! The extractor struct contains:
-//! - `result`: `WebSocketError!Socket`
-//!
-//! On success, the HTTP request is upgraded and a connected socket is available.
-//!
-//! The extractor can be used either:
-//! - as a router handler parameter (automatic injection), or
-//! - manually inside a handler body with `WebSocket{ .result = WebSocket.init(ctx) }`.
-//!
-//! In handlers, call `onConnected` to run your connection routine, then return `intoResponse()`.
-//!
-//! ```zig
-//! fn handleRequest(ctx: Context, ws: WebSocket) !Response {
-//!     try ws.onConnected(handleWebSocket, .{ ctx });
-//!     return ws.intoResponse();
-//! }
-//! ```
 const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
@@ -73,19 +54,6 @@ pub fn onConnected(self: *const Self, handler: anytype, args: anytype) !void {
     try @call(.always_inline, handler, new_args);
 }
 
-pub const Resolver = struct {
-    pub fn matches(comptime Extractor: type) bool {
-        return Extractor == Self;
-    }
-
-    pub fn resolve(comptime Extractor: type, arena: Allocator, req: *Request) Extractor {
-        _ = arena;
-        comptime assert(Extractor == Self);
-        const result = extract(req);
-        return .{ .result = result };
-    }
-};
-
 fn extract(req: *Request) WebSocketError!WebSocket {
     const upg = req.upgradeRequested();
     return switch (upg) {
@@ -137,25 +105,6 @@ test "init returns NotWebSocketUpgrade for regular HTTP request" {
     };
     const ws_result = Self.init(test_ctx);
     try testing.expectEqual(WebSocketError.NotWebSocketUpgrade, ws_result);
-}
-
-test "Resolver.matches is true only for WebSocket extractor" {
-    try testing.expect(Resolver.matches(Self));
-    try testing.expect(!Resolver.matches(utils.TestExtractor));
-}
-
-test "Resolver.resolve stores upgrade error for regular HTTP request" {
-    const req_bytes = "GET /ws HTTP/1.1\r\n\r\n";
-    var stream_buf_reader = Reader.fixed(req_bytes);
-
-    var write_buffer: [4096]u8 = undefined;
-    var stream_buf_writer = Writer.fixed(&write_buffer);
-
-    var http_server = Server.init(&stream_buf_reader, &stream_buf_writer);
-    var http_req = try http_server.receiveHead();
-
-    const extracted = Resolver.resolve(Self, testing.allocator, &http_req);
-    try testing.expectError(WebSocketError.NotWebSocketUpgrade, extracted.result);
 }
 
 test "onConnected returns stored extractor error" {

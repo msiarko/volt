@@ -107,7 +107,9 @@ fn extract(comptime T: type, arena: Allocator, req: *Request) FormError!*T {
     const content = try reader.readAlloc(arena, content_length);
     if (std.mem.startsWith(u8, content_type, "multipart/form-data")) {
         const boundary_prefix = "boundary=";
-        const boundary_pos = std.mem.findLast(u8, content_type, boundary_prefix) orelse return FormError.MissingBoundary;
+        const boundary_pos = std.mem.findLast(u8, content_type, boundary_prefix) orelse
+            return FormError.MissingBoundary;
+
         const boundary = std.mem.trim(u8, content_type[boundary_pos + boundary_prefix.len ..], "\r\n");
         const delimeter = try std.fmt.allocPrint(arena, "--{s}", .{boundary});
         defer arena.free(delimeter);
@@ -120,34 +122,6 @@ fn extract(comptime T: type, arena: Allocator, req: *Request) FormError!*T {
     }
 }
 
-/// Creates a `Form` extractor type
-///
-/// The resulting extractor struct contains:
-/// - `result`: `FormError!*T`
-///
-/// `result` semantics:
-/// - `error`: parsing error (e.g., malformed multipart body, invalid percent-encoding, unsupported content type, allocator failure, etc.)
-/// - `T`: decoded form value of type `T`, where `T` is a struct with fields corresponding to form keys
-///
-/// Parameter-name matching is case-insensitive and compares against the decoded key.
-/// Value decoding is single-pass (`+` -> space, `%XX` escapes decoded once).
-///
-/// The extractor can be used either:
-/// - as a router handler parameter (automatic injection), or
-/// - manually inside a handler body with `Form(T).init(ctx)`.
-///
-/// ```zig
-/// fn handleRequest(ctx: Context, form: Form(Person)) !Response {
-///     const form_data = form.result catch |e| {
-///         _ = e;
-///         return Response.badRequest();
-///     };
-///
-///     _ = ctx;
-///     _ = form_data;
-///     return Response.ok();
-/// }
-/// ```
 pub fn Form(comptime T: type) type {
     return struct {
         pub const ID: []const u8 = EXTRACTOR_ID;
@@ -162,14 +136,11 @@ pub fn Form(comptime T: type) type {
 }
 
 pub const Resolver = struct {
-    pub fn matches(comptime Extractor: type) bool {
-        if (!@hasDecl(Extractor, "ID")) return false;
-        return std.mem.eql(u8, @field(Extractor, "ID"), EXTRACTOR_ID);
-    }
+    pub const ID: []const u8 = EXTRACTOR_ID;
 
-    pub fn resolve(comptime Extractor: type, arena: Allocator, req: *Request) Extractor {
+    pub fn resolve(comptime Extractor: type, ctx: Context) Extractor {
         comptime assert(@hasDecl(Extractor, "PAYLOAD_TYPE"));
-        return .{ .result = extract(@field(Extractor, "PAYLOAD_TYPE"), arena, req) };
+        return .{ .result = extract(@field(Extractor, "PAYLOAD_TYPE"), ctx.req_arena, ctx.raw_req) };
     }
 };
 
@@ -178,7 +149,6 @@ const Reader = std.Io.Reader;
 const Writer = std.Io.Writer;
 const Server = std.http.Server;
 
-// TODO: add more tests, including error cases and edge cases (e.g., missing fields, invalid content types, etc.)
 test "init returns Form with value when content type is multipart/form-data" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();

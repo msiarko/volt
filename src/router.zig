@@ -10,7 +10,6 @@ const ArgsTuple = std.meta.ArgsTuple;
 const FnParam = std.builtin.Type.Fn.Param;
 
 const JsonResolver = @import("extractors/json.zig").Resolver;
-const WebSocketResolver = @import("extractors/WebSocket.zig").Resolver;
 const QueryResolver = @import("extractors/query.zig").Resolver;
 const TypedQueryResolver = @import("extractors/typed_query.zig").Resolver;
 const HeaderResolver = @import("extractors/header.zig").Resolver;
@@ -19,12 +18,17 @@ const FormResolver = @import("extractors/form.zig").Resolver;
 
 const extractor_resolvers = .{
     JsonResolver,
-    WebSocketResolver,
     QueryResolver,
     TypedQueryResolver,
     HeaderResolver,
     FormResolver,
+    RouteParamResolver,
 };
+
+pub fn matches(comptime Extractor: type, comptime EXTRACTOR_ID: []const u8) bool {
+    if (!@hasDecl(Extractor, "ID")) return false;
+    return std.mem.eql(u8, @field(Extractor, "ID"), EXTRACTOR_ID);
+}
 
 fn getArgsTypes(func_params: []const FnParam) []const type {
     comptime var func_param_types: [func_params.len]type = undefined;
@@ -40,34 +44,6 @@ fn funcParams(comptime T: type) []const FnParam {
     return @typeInfo(func_type_info).@"fn".params;
 }
 
-/// Creates a generic HTTP router type parameterized by application state.
-///
-/// The State type parameter allows handlers to access shared application state.
-/// The router automatically resolves handler parameters from the request using
-/// compile-time reflection and built-in extract support.
-///
-/// Example:
-/// ```zig
-/// const MyState = struct { db: Database };
-/// const MyRouter = Router(MyState);
-///
-/// var router: MyRouter = .init(allocator, .{ .db = db });
-/// defer router.deinit(allocator);
-///
-/// fn myHandler(ctx: Context, state: MyState, data: Json(MyStruct)) !Response {
-///     // Parameters automatically extracted from request
-///     _ = data; // JSON body deserialized to MyStruct
-///     _ = state;
-///     return Response.ok(ctx.req_arena, null, null);
-/// }
-///
-/// try router.get(allocator, "/users", &myHandler);
-///
-/// // Stateless handlers for Router(void) should omit state entirely.
-/// fn health(ctx: Context) !Response {
-///     return Response.ok(ctx.req_arena, null, null);
-/// }
-/// ```
 pub fn Router(comptime State: type) type {
     return struct {
         const Self = @This();
@@ -77,7 +53,7 @@ pub fn Router(comptime State: type) type {
         parametric_routes: std.ArrayList(ParametricRoute),
 
         const VTable = struct {
-            execute: *const fn (*const anyopaque, Context, State, ?[]const u8) anyerror!Response,
+            execute: *const fn (*const anyopaque, Context, State) anyerror!Response,
         };
 
         const Handler = struct {
@@ -89,29 +65,25 @@ pub fn Router(comptime State: type) type {
             pub fn init(comptime FnPtr: type, h: *const anyopaque) @This() {
                 const Fn = @typeInfo(FnPtr).pointer.child;
                 const impl = struct {
-                    fn exec(ptr: *const anyopaque, ctx: Context, state: State, route_pattern: ?[]const u8) !Response {
+                    fn exec(ptr: *const anyopaque, ctx: Context, state: State) !Response {
                         var args: ArgsTuple(Fn) = undefined;
                         const args_fields = comptime std.meta.fields(ArgsTuple(Fn));
                         inline for (args_fields, 0..args_fields.len) |field, i| {
                             switch (field.type) {
                                 Context => args[i] = ctx,
                                 State => args[i] = state,
+                                WebSocket => args[i] = .{ .result = WebSocket.init(ctx) },
                                 else => |Arg| {
                                     comptime var resolved = false;
                                     inline for (extractor_resolvers) |Resolver| {
-                                        if (!resolved and comptime Resolver.matches(Arg)) {
-                                            args[i] = Resolver.resolve(Arg, ctx.req_arena, ctx.raw_req);
+                                        if (!resolved and comptime matches(Arg, Resolver.ID)) {
+                                            args[i] = Resolver.resolve(Arg, ctx);
                                             resolved = true;
                                         }
                                     }
 
-                                    if (!resolved and comptime RouteParamResolver.matches(Arg)) {
-                                        args[i] = RouteParamResolver.resolve(Arg, ctx.req_arena, route_pattern, ctx.raw_req);
-                                        resolved = true;
-                                    }
-
                                     if (!resolved) {
-                                        @compileError("unable to resolve parameter of type " ++ @typeName(field));
+                                        @compileError("unable to resolve parameter of type " ++ @typeName(field.type));
                                     }
                                 },
                             }
@@ -130,8 +102,8 @@ pub fn Router(comptime State: type) type {
                 };
             }
 
-            pub fn execute(self: *const Handler, ctx: Context, state: State, route_pattern: ?[]const u8) !Response {
-                return self.vtable.execute(self.ptr, ctx, state, route_pattern);
+            pub fn execute(self: *const Handler, ctx: Context, state: State) !Response {
+                return self.vtable.execute(self.ptr, ctx, state);
             }
         };
 
@@ -268,24 +240,23 @@ pub fn Router(comptime State: type) type {
                     break;
                 };
 
-                var arena = std.heap.ArenaAllocator.init(allocator);
-                defer arena.deinit();
-
-                const req_allocator = arena.allocator();
-                const ctx: Context = .init(
-                    io,
-                    req_allocator,
-                    &req,
-                );
-
-                self.handleRequest(ctx) catch |err| {
+                self.handleRequest(io, allocator, &req) catch |err| {
                     if (err == error.ConnectionClose) break;
                     req.respond(@errorName(err), .{ .status = .internal_server_error }) catch continue;
                 };
             }
         }
 
-        fn handleRequest(self: *const Self, ctx: Context) !void {
+        fn handleRequest(self: *const Self, io: std.Io, allocator: Allocator, req: *HttpRequest) !void {
+            var arena = std.heap.ArenaAllocator.init(allocator);
+            defer arena.deinit();
+
+            var ctx: Context = .init(
+                io,
+                arena.allocator(),
+                req,
+            );
+
             const target = normalizedTarget(ctx.raw_req.head.target);
             const method = ctx.raw_req.head.method;
             var path_matched = false;
@@ -294,7 +265,7 @@ pub fn Router(comptime State: type) type {
             if (self.routes.get(target)) |route_entry| {
                 path_matched = true;
                 if (route_entry.handlers.get(method)) |handler| {
-                    return executeHandler(handler, ctx, self.state, null);
+                    return executeHandler(handler, ctx, self.state);
                 }
 
                 collectAllowedMethods(&allowed_methods, route_entry.handlers);
@@ -304,7 +275,8 @@ pub fn Router(comptime State: type) type {
                 if (route.match(target)) {
                     path_matched = true;
                     if (route.entry.handlers.get(method)) |handler| {
-                        return executeHandler(handler, ctx, self.state, route.pattern);
+                        ctx.route_pattern = route.pattern;
+                        return executeHandler(handler, ctx, self.state);
                     }
                     collectAllowedMethods(&allowed_methods, route.entry.handlers);
                 }
@@ -317,8 +289,8 @@ pub fn Router(comptime State: type) type {
             return respondNotFound(ctx.raw_req);
         }
 
-        fn executeHandler(handler: Router(State).Handler, ctx: Context, state: State, pattern: ?[]const u8) !void {
-            const res = handler.execute(ctx, state, pattern) catch |err| {
+        fn executeHandler(handler: Router(State).Handler, ctx: Context, state: State) !void {
+            const res = handler.execute(ctx, state) catch |err| {
                 if (isMemberOfErrorSet(WebSocket.WebSocketError, err)) return;
                 try ctx.raw_req.respond(@errorName(err), .{ .status = .internal_server_error });
                 return;
@@ -537,13 +509,7 @@ test "handleRequest returns 404 for unknown route" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var req = try http_server.receiveHead();
 
-    const ctx: Context = .{
-        .io = undefined,
-        .req_arena = std.testing.allocator,
-        .raw_req = &req,
-    };
-
-    try TestRouter.handleRequest(&router, ctx);
+    try TestRouter.handleRequest(&router, std.testing.io, std.testing.allocator, &req);
     try stream_buf_writer.flush();
 
     const output = write_buffer[0..stream_buf_writer.end];
@@ -570,13 +536,7 @@ test "handleRequest returns 405 for method mismatch" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var req = try http_server.receiveHead();
 
-    const ctx: Context = .{
-        .io = undefined,
-        .req_arena = std.testing.allocator,
-        .raw_req = &req,
-    };
-
-    try TestRouter.handleRequest(&router, ctx);
+    try TestRouter.handleRequest(&router, std.testing.io, std.testing.allocator, &req);
     try stream_buf_writer.flush();
 
     const output = write_buffer[0..stream_buf_writer.end];
@@ -605,13 +565,7 @@ test "handleRequest returns 405 with Allow header for parametric route mismatch"
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var req = try http_server.receiveHead();
 
-    const ctx: Context = .{
-        .io = undefined,
-        .req_arena = std.testing.allocator,
-        .raw_req = &req,
-    };
-
-    try TestRouter.handleRequest(&router, ctx);
+    try TestRouter.handleRequest(&router, std.testing.io, std.testing.allocator, &req);
     try stream_buf_writer.flush();
 
     const output = write_buffer[0..stream_buf_writer.end];
@@ -645,16 +599,7 @@ test "handleRequest falls back to parametric method when exact path lacks method
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var req = try http_server.receiveHead();
 
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    const ctx: Context = .{
-        .io = undefined,
-        .req_arena = arena.allocator(),
-        .raw_req = &req,
-    };
-
-    try TestRouter.handleRequest(&router, ctx);
+    try TestRouter.handleRequest(&router, std.testing.io, std.testing.allocator, &req);
     try stream_buf_writer.flush();
 
     const output = write_buffer[0..stream_buf_writer.end];
@@ -688,13 +633,7 @@ test "handleRequest returns combined Allow header for overlapping path matches" 
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var req = try http_server.receiveHead();
 
-    const ctx: Context = .{
-        .io = undefined,
-        .req_arena = std.testing.allocator,
-        .raw_req = &req,
-    };
-
-    try TestRouter.handleRequest(&router, ctx);
+    try TestRouter.handleRequest(&router, std.testing.io, std.testing.allocator, &req);
     try stream_buf_writer.flush();
 
     const output = write_buffer[0..stream_buf_writer.end];
@@ -728,13 +667,7 @@ test "handleRequest ignores websocket extractor errors" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var req = try http_server.receiveHead();
 
-    const ctx: Context = .{
-        .io = undefined,
-        .req_arena = std.testing.allocator,
-        .raw_req = &req,
-    };
-
-    try TestRouter.handleRequest(&router, ctx);
+    try TestRouter.handleRequest(&router, std.testing.io, std.testing.allocator, &req);
     try stream_buf_writer.flush();
     try std.testing.expectEqual(@as(usize, 0), stream_buf_writer.end);
 }
@@ -764,16 +697,7 @@ test "handleRequest prefers exact route over parametric overlap" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var req = try http_server.receiveHead();
 
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    const ctx: Context = .{
-        .io = undefined,
-        .req_arena = arena.allocator(),
-        .raw_req = &req,
-    };
-
-    try TestRouter.handleRequest(&router, ctx);
+    try TestRouter.handleRequest(&router, std.testing.io, std.testing.allocator, &req);
     try stream_buf_writer.flush();
 
     const output = write_buffer[0..stream_buf_writer.end];
@@ -808,16 +732,7 @@ test "handleRequest applies parametric precedence by literal segments" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var req = try http_server.receiveHead();
 
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    const ctx: Context = .{
-        .io = undefined,
-        .req_arena = arena.allocator(),
-        .raw_req = &req,
-    };
-
-    try TestRouter.handleRequest(&router, ctx);
+    try TestRouter.handleRequest(&router, std.testing.io, std.testing.allocator, &req);
     try stream_buf_writer.flush();
 
     const output = write_buffer[0..stream_buf_writer.end];
@@ -861,16 +776,7 @@ test "literal colon segment is treated as exact route" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var req = try http_server.receiveHead();
 
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    const ctx: Context = .{
-        .io = undefined,
-        .req_arena = arena.allocator(),
-        .raw_req = &req,
-    };
-
-    try TestRouter.handleRequest(&router, ctx);
+    try TestRouter.handleRequest(&router, std.testing.io, std.testing.allocator, &req);
     try stream_buf_writer.flush();
 
     const output = write_buffer[0..stream_buf_writer.end];
@@ -898,16 +804,7 @@ test "router duplicates route path keys on registration" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var req = try http_server.receiveHead();
 
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    const ctx: Context = .{
-        .io = undefined,
-        .req_arena = arena.allocator(),
-        .raw_req = &req,
-    };
-
-    try TestRouter.handleRequest(&router, ctx);
+    try TestRouter.handleRequest(&router, std.testing.io, std.testing.allocator, &req);
     try stream_buf_writer.flush();
 
     const output = write_buffer[0..stream_buf_writer.end];

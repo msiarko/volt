@@ -24,33 +24,6 @@ fn extract(comptime name: []const u8, arena: Allocator, req: *Request) Allocator
     return null;
 }
 
-/// Creates a `Query` extractor type for a single query parameter.
-///
-/// The resulting extractor struct contains:
-/// - `result`: `QueryError!?[]const u8`
-///
-/// `result` semantics:
-/// - `error`: malformed percent-encoding or allocator failure while decoding
-/// - `null`: query string missing, parameter missing, or parameter present with an empty value
-/// - `[]const u8`: decoded parameter value
-///
-/// Parameter-name matching is case-insensitive and compares against the decoded key.
-/// The extractor can be used either:
-/// - as a router handler parameter (automatic injection), or
-/// - manually inside a handler body with `Query(name).init(ctx)`.
-///
-/// ```zig
-/// fn handleRequest(ctx: Context, filter: Query("filter")) !Response {
-///     const maybe_filter = filter.result catch |e| {
-///         _ = e;
-///         return Response.badRequest();
-///     };
-///
-///     _ = ctx;
-///     _ = maybe_filter;
-///     return Response.ok();
-/// }
-/// ```
 pub fn Query(comptime name: []const u8) type {
     assert(name.len > 0);
     return struct {
@@ -66,15 +39,11 @@ pub fn Query(comptime name: []const u8) type {
 }
 
 pub const Resolver = struct {
-    pub fn matches(comptime Extractor: type) bool {
-        if (!@hasDecl(Extractor, "ID")) return false;
-        return std.mem.eql(u8, @field(Extractor, "ID"), EXTRACTOR_ID);
-    }
+    pub const ID: []const u8 = EXTRACTOR_ID;
 
-    pub fn resolve(comptime Extractor: type, arena: Allocator, req: *Request) Extractor {
+    pub fn resolve(comptime Extractor: type, ctx: Context) Extractor {
         comptime assert(@hasDecl(Extractor, "PARAM_NAME"));
-        const result = extract(@field(Extractor, "PARAM_NAME"), arena, req);
-        return .{ .result = result };
+        return .{ .result = extract(@field(Extractor, "PARAM_NAME"), ctx.req_arena, ctx.raw_req) };
     }
 };
 
@@ -83,7 +52,7 @@ const Server = std.http.Server;
 const Reader = std.Io.Reader;
 const Writer = std.Io.Writer;
 
-test "Query.init returns value when query param is present" {
+test "init returns value when query param is present" {
     const req_bytes = "GET /search?name=zig&role=admin HTTP/1.1\r\n\r\n";
     var stream_buf_reader = Reader.fixed(req_bytes);
 
@@ -108,7 +77,7 @@ test "Query.init returns value when query param is present" {
     try testing.expectEqualStrings("zig", res.?);
 }
 
-test "Query.init returns null when parameter is absent" {
+test "init returns null when parameter is absent" {
     const req_bytes = "GET /search?role=admin HTTP/1.1\r\n\r\n";
     var stream_buf_reader = Reader.fixed(req_bytes);
 
@@ -132,7 +101,7 @@ test "Query.init returns null when parameter is absent" {
     try testing.expectEqual(null, res);
 }
 
-test "Query.init returns null for empty parameter value" {
+test "init returns null for empty parameter value" {
     const req_bytes = "GET /search?name=&role=admin HTTP/1.1\r\n\r\n";
     var stream_buf_reader = Reader.fixed(req_bytes);
 
@@ -157,7 +126,7 @@ test "Query.init returns null for empty parameter value" {
     try testing.expectEqual(null, res);
 }
 
-test "Query.init returns the source value when percent decoding is not needed" {
+test "init returns the source value when percent decoding is not needed" {
     const req_bytes = "GET /search?name=bad%2 HTTP/1.1\r\n\r\n";
     var stream_buf_reader = Reader.fixed(req_bytes);
 
@@ -181,7 +150,7 @@ test "Query.init returns the source value when percent decoding is not needed" {
     try testing.expectEqualStrings("bad%2", result.?);
 }
 
-test "Query.init returns null when request has no query string" {
+test "init returns null when request has no query string" {
     const req_bytes = "GET /search HTTP/1.1\r\n\r\n";
     var stream_buf_reader = Reader.fixed(req_bytes);
 
@@ -205,7 +174,7 @@ test "Query.init returns null when request has no query string" {
     try testing.expectEqual(null, res);
 }
 
-test "Query.init matches decoded key name case-insensitively" {
+test "init matches decoded key name case-insensitively" {
     const req_bytes = "GET /search?first%20name=Ana HTTP/1.1\r\n\r\n";
     var stream_buf_reader = Reader.fixed(req_bytes);
 
@@ -230,18 +199,7 @@ test "Query.init matches decoded key name case-insensitively" {
     try testing.expectEqualStrings("Ana", res.?);
 }
 
-test "Query.Resolver.matches identifies query extractor types" {
-    const OtherExtractor = struct {
-        pub const ID: []const u8 = "OTHER_EXTRACTOR";
-        pub const PARAM_NAME: []const u8 = "name";
-    };
-
-    try testing.expect(Resolver.matches(Query("name")));
-    try testing.expect(!Resolver.matches(utils.TestExtractor));
-    try testing.expect(!Resolver.matches(OtherExtractor));
-}
-
-test "Query.Resolver.resolve uses extractor PARAM_NAME" {
+test "Resolver.resolve uses extractor PARAM_NAME" {
     const req_bytes = "GET /search?name=zig HTTP/1.1\r\n\r\n";
     var stream_buf_reader = Reader.fixed(req_bytes);
 
@@ -254,7 +212,12 @@ test "Query.Resolver.resolve uses extractor PARAM_NAME" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const resolved = Resolver.resolve(Query("name"), arena.allocator(), &http_req);
+    const test_ctx: Context = .{
+        .io = undefined,
+        .req_arena = arena.allocator(),
+        .raw_req = &http_req,
+    };
+    const resolved = Resolver.resolve(Query("name"), test_ctx);
     const value = try resolved.result;
     try testing.expectEqualStrings("zig", value.?);
 }

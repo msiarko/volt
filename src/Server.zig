@@ -1,13 +1,3 @@
-//! HTTP server runtime that accepts connections and dispatches requests to a Router.
-//!
-//! Example:
-//! ```zig
-//! const MyServer = Server;
-//!
-//! Handlers should only allocate request-scoped memory with `ctx.req_arena`.
-//! For state updates that require longer-lived allocations, store an allocator in
-//! the state struct itself and free those allocations during your state deinit.
-//! ```
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Router = @import("router.zig").Router;

@@ -1,35 +1,3 @@
-//! Execution context passed to all HTTP request handlers.
-//!
-//! The Context provides the essential resources needed for request processing:
-//! - I/O interface for network operations
-//! - Arena allocator for request-scoped temporary allocations
-//! - Raw request pointer for manual extractor usage
-//!
-//! Request-scoped data is freed automatically at the end of each request.
-//!
-//! **I/O:** Request/connection I/O within handlers must use
-//! `ctx.io` rather than obtaining a separate I/O handle. This ensures correct
-//! participation in the async event loop and proper cancellation support.
-//! Diagnostic logging may use `std.log`.
-//!
-//! Example usage in a handler:
-//! ```zig
-//! fn myHandler(ctx: Context, state: *MyState) !Response {
-//!     // Automatic extraction via parameter type:
-//!     // fn myHandler(ctx: Context, state: *MyState, body: Json(MyStruct)) !Response
-//!
-//!     // Manual extraction for full control:
-//!     const body = try extract.Json(MyStruct).init(ctx);
-//!
-//!     // For lower-level control, use the raw request directly.
-//!     // This is useful when you want to manage protocol details yourself,
-//!     // such as custom WebSocket upgrade handling.
-//!     const req = ctx.raw_req;
-//!     _ = req;
-//!
-//!     return Response.json(ctx.req_arena, .ok, "success", null);
-//! }
-//! ```
 const std = @import("std");
 const Request = std.http.Server.Request;
 
@@ -53,6 +21,9 @@ req_arena: std.mem.Allocator,
 ///
 /// Do not store this pointer in state that outlives the request.
 raw_req: *Request,
+
+/// The route pattern that matched this request, if any. This is used by some extractors like RouteParam.
+route_pattern: ?[]const u8 = null,
 
 /// Convenience initializer for constructing request context values.
 ///

@@ -18,26 +18,6 @@ fn extract(comptime name: []const u8, req: *Request) Header(name) {
     return .{ .value = null };
 }
 
-/// Creates a Header extractor type for a specific HTTP header name.
-///
-/// Fields:
-/// - `value` An optional slice of bytes that contains the value of the header if it is present in the request, or `null` if the header is absent
-///
-/// Header name comparison is case-insensitive.
-///
-/// Example usage in a router handler:
-/// ```zig
-/// fn handleRequest(ctx: Context, auth: Header("Authorization")) !Response {
-///     const token = auth.value orelse return Response.unauthorized();
-///     // Use token...
-/// }
-///
-/// fn handleRequest(ctx: Context) !Response {
-///     const auth = try Header("Authorization").init(ctx);
-///     const token = auth.value orelse return Response.unauthorized();
-///     // Use token...
-/// }
-/// ```
 pub fn Header(comptime name: []const u8) type {
     assert(name.len > 0);
     return struct {
@@ -55,15 +35,11 @@ pub fn Header(comptime name: []const u8) type {
 }
 
 pub const Resolver = struct {
-    pub fn matches(comptime Extractor: type) bool {
-        if (!@hasDecl(Extractor, "ID")) return false;
-        return std.mem.eql(u8, @field(Extractor, "ID"), EXTRACTOR_ID);
-    }
+    pub const ID: []const u8 = EXTRACTOR_ID;
 
-    pub fn resolve(comptime Extractor: type, allocator: Allocator, req: *Request) Extractor {
-        _ = allocator;
+    pub fn resolve(comptime Extractor: type, ctx: Context) Extractor {
         comptime assert(@hasDecl(Extractor, "HEADER_NAME"));
-        return extract(@field(Extractor, "HEADER_NAME"), req);
+        return extract(@field(Extractor, "HEADER_NAME"), ctx.raw_req);
     }
 };
 
@@ -210,16 +186,6 @@ test "init header name matching is case-insensitive" {
     try testing.expectEqualStrings("Bearer token123", header.value.?);
 }
 
-test "Resolver.matches identifies header extractor types" {
-    const OtherExtractor = struct {
-        pub const ID: []const u8 = "OTHER_EXTRACTOR";
-    };
-
-    try testing.expect(Resolver.matches(Header("x-id")));
-    try testing.expect(!Resolver.matches(utils.TestExtractor));
-    try testing.expect(!Resolver.matches(OtherExtractor));
-}
-
 test "Resolver.resolve extracts using extractor HEADER_NAME" {
     const req_bytes = "GET / HTTP/1.1\r\nX-Request-Id: abc-123\r\n\r\n";
     var stream_buf_reader = Reader.fixed(req_bytes);
@@ -230,6 +196,11 @@ test "Resolver.resolve extracts using extractor HEADER_NAME" {
     var http_server = Server.init(&stream_buf_reader, &stream_buf_writer);
     var http_req = try http_server.receiveHead();
 
-    const resolved = Resolver.resolve(Header("X-Request-Id"), testing_allocator, &http_req);
+    const test_ctx: Context = .{
+        .io = undefined,
+        .req_arena = testing_allocator,
+        .raw_req = &http_req,
+    };
+    const resolved = Resolver.resolve(Header("X-Request-Id"), test_ctx);
     try testing.expectEqualStrings("abc-123", resolved.value.?);
 }

@@ -4,19 +4,6 @@ const HttpRequest = std.http.Server.Request;
 const WebSocket = @import("extractors/WebSocket.zig");
 const HttpHeader = std.http.Header;
 
-/// Unified response type that can represent HTTP responses or WebSocket upgrades.
-///
-/// This union allows handlers to return either regular HTTP responses with
-/// status codes, content, and headers, or trigger WebSocket upgrades.
-///
-/// Example:
-/// ```zig
-/// // HTTP JSON response
-/// return Response.json(arena, .ok, "{\"message\": \"Hello\"}", null);
-///
-/// // WebSocket upgrade
-/// return web_socket.intoResponse();
-/// ```
 pub const Response = union(enum) {
     const Self = @This();
 

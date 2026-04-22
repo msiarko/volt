@@ -50,40 +50,6 @@ fn extract(comptime T: type, arena: Allocator, req: *Request) TypedQueryError!?*
     return typed_query;
 }
 
-/// Creates a `TypedQuery` extractor type.
-///
-/// `T` must be a struct where every field is optional.
-/// Field names are matched case-insensitively against query keys.
-///
-/// The resulting extractor struct contains:
-/// - `result`: `QueryError!?*T`
-///
-/// `result` semantics:
-/// - `error`: malformed percent-encoding or allocator failure
-/// - `null`: request target has no query string
-/// - `*T`: allocated struct with each field set from matching query keys (unmatched fields are `null`)
-///
-/// The extractor can be used either:
-/// - as a router handler parameter (automatic injection), or
-/// - manually inside a handler body with `TypedQuery(T).init(ctx)`.
-///
-/// ```zig
-/// const Filter = struct {
-///     name: ?[]const u8,
-///     age: ?u8,
-/// };
-///
-/// fn handleRequest(ctx: Context, filter: TypedQuery(Filter)) !Response {
-///     const maybe_filter = filter.result catch |e| {
-///         _ = e;
-///         return Response.badRequest();
-///     };
-///
-///     _ = ctx;
-///     _ = maybe_filter;
-///     return Response.ok();
-/// }
-/// ```
 pub fn TypedQuery(comptime T: type) type {
     assert(T);
     return struct {
@@ -99,15 +65,11 @@ pub fn TypedQuery(comptime T: type) type {
 }
 
 pub const Resolver = struct {
-    pub fn matches(comptime Extractor: type) bool {
-        if (!@hasDecl(Extractor, "ID")) return false;
-        return std.mem.eql(u8, @field(Extractor, "ID"), EXTRACTOR_ID);
-    }
+    pub const ID: []const u8 = EXTRACTOR_ID;
 
-    pub fn resolve(comptime Extractor: type, arena: Allocator, req: *Request) Extractor {
+    pub fn resolve(comptime Extractor: type, ctx: Context) Extractor {
         comptime std.debug.assert(@hasDecl(Extractor, "PAYLOAD_TYPE"));
-        const result = extract(@field(Extractor, "PAYLOAD_TYPE"), arena, req);
-        return .{ .result = result };
+        return .{ .result = extract(@field(Extractor, "PAYLOAD_TYPE"), ctx.req_arena, ctx.raw_req) };
     }
 };
 
@@ -324,21 +286,6 @@ test "TypedQuery.init uses last value for duplicate keys" {
     try testing.expectEqualStrings("bob", typed.?.name.?);
 }
 
-test "TypedQuery.Resolver.matches identifies typed query extractor types" {
-    const OtherExtractor = struct {
-        pub const ID: []const u8 = "OTHER_EXTRACTOR";
-        pub const PAYLOAD_TYPE: type = struct { name: ?[]const u8 };
-    };
-
-    const Filter = struct {
-        name: ?[]const u8,
-    };
-
-    try testing.expect(Resolver.matches(TypedQuery(Filter)));
-    try testing.expect(!Resolver.matches(utils.TestExtractor));
-    try testing.expect(!Resolver.matches(OtherExtractor));
-}
-
 test "TypedQuery.Resolver.resolve populates result" {
     const Filter = struct {
         name: ?[]const u8,
@@ -356,7 +303,12 @@ test "TypedQuery.Resolver.resolve populates result" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const resolved = Resolver.resolve(TypedQuery(Filter), arena.allocator(), &http_req);
+    const test_ctx: Context = .{
+        .io = undefined,
+        .req_arena = arena.allocator(),
+        .raw_req = &http_req,
+    };
+    const resolved = Resolver.resolve(TypedQuery(Filter), test_ctx);
     const value = try resolved.result;
     try testing.expect(value != null);
     try testing.expectEqualStrings("alice", value.?.name.?);

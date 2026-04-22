@@ -50,40 +50,6 @@ pub const RequestValidationError = error{
 
 pub const JsonError = RequestValidationError || AllocatorError || ReaderError || ParseError;
 
-/// Creates a `Json` extractor type.
-///
-/// The resulting extractor struct contains:
-/// - `result`: `JsonError!T`
-///
-/// `result` is successful when request validation and JSON parsing succeed.
-/// Validation requires:
-/// - a method that supports request bodies,
-/// - `Content-Type: application/json`,
-/// - a non-zero `Content-Length`,
-/// - and a valid JSON body that matches `T`.
-///
-/// The extractor can be used either:
-/// - as a router handler parameter (automatic injection), or
-/// - manually inside a handler body with `Json(T).init(ctx)`.
-///
-/// ```zig
-/// const Person = struct {
-///     name: []const u8,
-///     age: u7,
-/// };
-///
-/// fn handleRequest(ctx: Context, person: Json(Person)) !Response {
-///     const payload = person.result catch |e| {
-///         _ = e;
-///         // Handle JSON or validation error.
-///         return Response.badRequest();
-///     };
-///
-///     _ = ctx;
-///     _ = payload;
-///     return Response.ok();
-/// }
-/// ```
 pub fn Json(comptime T: type) type {
     return struct {
         pub const ID: []const u8 = EXTRACTOR_ID;
@@ -98,14 +64,15 @@ pub fn Json(comptime T: type) type {
 }
 
 pub const Resolver = struct {
-    pub fn matches(comptime Extractor: type) bool {
-        if (!@hasDecl(Extractor, "ID")) return false;
-        return std.mem.eql(u8, @field(Extractor, "ID"), EXTRACTOR_ID);
-    }
+    pub const ID: []const u8 = EXTRACTOR_ID;
+    // pub fn matches(comptime Extractor: type) bool {
+    //     if (!@hasDecl(Extractor, "ID")) return false;
+    //     return std.mem.eql(u8, @field(Extractor, "ID"), EXTRACTOR_ID);
+    // }
 
-    pub fn resolve(comptime Extractor: type, arena: Allocator, req: *Request) Extractor {
+    pub fn resolve(comptime Extractor: type, ctx: Context) Extractor {
         comptime assert(@hasDecl(Extractor, "PAYLOAD_TYPE"));
-        const result = extract(@field(Extractor, "PAYLOAD_TYPE"), arena, req);
+        const result = extract(@field(Extractor, "PAYLOAD_TYPE"), ctx.req_arena, ctx.raw_req);
         return .{ .result = result };
     }
 };
@@ -115,7 +82,7 @@ const Reader = std.Io.Reader;
 const Writer = std.Io.Writer;
 const testing = std.testing;
 
-test "Json.init returns extractor error when content type header is missing" {
+test "init returns extractor error when content type header is missing" {
     const Person = struct {
         name: []const u8,
         age: u7,
@@ -141,7 +108,7 @@ test "Json.init returns extractor error when content type header is missing" {
     try testing.expectError(RequestValidationError.ContentTypeMissing, Json(Person).init(test_ctx));
 }
 
-test "Json.init returns RequestBodyMissing for methods without a body (GET)" {
+test "init returns RequestBodyMissing for methods without a body (GET)" {
     const Person = struct {
         name: []const u8,
         age: u8,
@@ -169,7 +136,7 @@ test "Json.init returns RequestBodyMissing for methods without a body (GET)" {
     try testing.expectError(RequestValidationError.RequestBodyMissing, Json(Person).init(test_ctx));
 }
 
-test "Json.init returns ContentLengthMissing when header is absent" {
+test "init returns ContentLengthMissing when header is absent" {
     const Person = struct {
         name: []const u8,
         age: u8,
@@ -197,7 +164,7 @@ test "Json.init returns ContentLengthMissing when header is absent" {
     try testing.expectError(RequestValidationError.ContentLengthMissing, Json(Person).init(test_ctx));
 }
 
-test "Json.init returns EmptyRequestBody when content length is zero" {
+test "init returns EmptyRequestBody when content length is zero" {
     const Person = struct {
         name: []const u8,
         age: u8,
@@ -225,7 +192,7 @@ test "Json.init returns EmptyRequestBody when content length is zero" {
     try testing.expectError(RequestValidationError.EmptyRequestBody, Json(Person).init(test_ctx));
 }
 
-test "Json.init returns InvalidContentType when content type header is incorrect" {
+test "init returns InvalidContentType when content type header is incorrect" {
     const Person = struct {
         name: []const u8,
         age: u8,
@@ -253,7 +220,7 @@ test "Json.init returns InvalidContentType when content type header is incorrect
     try testing.expectError(RequestValidationError.InvalidContentType, Json(Person).init(test_ctx));
 }
 
-test "Json.init successfully parses valid JSON body" {
+test "init successfully parses valid JSON body" {
     const Person = struct {
         name: []const u8,
         age: u8,
@@ -284,7 +251,7 @@ test "Json.init successfully parses valid JSON body" {
     try testing.expectEqual(@as(u8, 30), person.age);
 }
 
-test "Json.init surfaces parse errors for invalid JSON" {
+test "init surfaces parse errors for invalid JSON" {
     const Person = struct {
         name: []const u8,
         age: u8,
@@ -292,7 +259,10 @@ test "Json.init surfaces parse errors for invalid JSON" {
 
     // Malformed JSON: just an opening brace
     const body = "{";
-    const req_bytes = std.fmt.comptimePrint("POST /person HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: {d}\r\n\r\n{s}", .{ body.len, body });
+    const req_bytes = std.fmt.comptimePrint(
+        "POST /person HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: {d}\r\n\r\n{s}",
+        .{ body.len, body },
+    );
 
     var stream_buf_reader = Reader.fixed(req_bytes);
     var write_buffer: [4096]u8 = undefined;
@@ -325,18 +295,7 @@ test "Json.init surfaces parse errors for invalid JSON" {
     try testing.expect(false);
 }
 
-test "Json.Resolver.matches identifies Json extractor types" {
-    const OtherExtractor = struct {
-        pub const ID: []const u8 = "OTHER_EXTRACTOR";
-        pub const PAYLOAD_TYPE: type = struct {};
-    };
-
-    try testing.expect(Resolver.matches(Json(struct { x: u8 })));
-    try testing.expect(!Resolver.matches(OtherExtractor));
-    try testing.expect(!Resolver.matches(struct {}));
-}
-
-test "Json.Resolver.resolve returns parsed payload in result" {
+test "Resolver.resolve returns parsed payload in result" {
     const Person = struct {
         name: []const u8,
         age: u8,
@@ -357,7 +316,13 @@ test "Json.Resolver.resolve returns parsed payload in result" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const resolved = Resolver.resolve(Json(Person), arena.allocator(), &http_req);
+    const test_ctx: Context = .{
+        .io = undefined,
+        .req_arena = arena.allocator(),
+        .raw_req = &http_req,
+    };
+
+    const resolved = Resolver.resolve(Json(Person), test_ctx);
     const person = try resolved.result;
     try testing.expectEqualStrings("Ana", person.name);
     try testing.expectEqual(@as(u8, 28), person.age);
