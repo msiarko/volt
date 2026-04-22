@@ -52,9 +52,9 @@ pub const Server = @import("Server.zig");
 ///
 /// Example usage in a handler:
 /// ```zig
-/// fn myHandler(ctx: Context, state: *MyState) !Response {
+/// fn myHandler(ctx: Context, state: MyState) !Response {
 ///     // Automatic extraction via parameter type:
-///     // fn myHandler(ctx: Context, state: *MyState, body: Json(MyStruct)) !Response
+///     // fn myHandler(ctx: Context, state: MyState, body: Json(MyStruct)) !Response
 ///
 ///     // Manual extraction for full control:
 ///     const body = try extract.Json(MyStruct).init(ctx);

@@ -109,7 +109,7 @@ All extractors can be used in two ways:
 ### Manual Extraction With init(ctx)
 
 ```zig
-fn createUserManual(ctx: volt.Context, state: *AppState) !volt.Response {
+fn createUserManual(ctx: volt.Context, state: AppState) !volt.Response {
     _ = state;
 
     const user = try volt.extract.Json(CreateUserRequest).init(ctx);
@@ -142,7 +142,7 @@ const CreateUserRequest = struct {
 
 fn createUser(
     ctx: volt.Context,
-    state: *AppState,
+    state: AppState,
     user_data: volt.extract.Json(CreateUserRequest)
 ) !volt.Response {
     _ = state;
@@ -161,14 +161,14 @@ fn createUser(
 ```zig
 fn websocketHandler(
     ctx: volt.Context,
-    state: *AppState,
+    state: AppState,
     ws: volt.extract.WebSocket
 ) !volt.Response {
     try ws.onConnected(handleConnection, .{ctx, state});
     return ws.intoResponse();
 }
 
-fn handleConnection(ctx: volt.Context, state: *AppState, socket: *std.http.Server.WebSocket) !void {
+fn handleConnection(ctx: volt.Context, state: AppState, socket: *std.http.Server.WebSocket) !void {
     const message = try socket.readMessage();
     try socket.writeMessage("Hello from server!", .text);
 }
@@ -185,7 +185,7 @@ Behavior notes:
 ```zig
 fn findUser(
     ctx: volt.Context,
-    state: *AppState,
+    state: AppState,
     user_id: volt.extract.Query("id")
 ) !volt.Response {
     _ = state;
@@ -208,7 +208,7 @@ fn findUser(
 ```zig
 fn secureHandler(
     ctx: volt.Context,
-    state: *AppState,
+    state: AppState,
     auth: volt.extract.Header("Authorization")
 ) !volt.Response {
     _ = state;
@@ -243,7 +243,7 @@ try router.get(allocator, "/teams/:team_id/users/:user_id", &getTeamUser);
 
 fn getUserById(
     ctx: volt.Context,
-    state: *AppState,
+    state: AppState,
     user_id: volt.extract.RouteParam("id")
 ) !volt.Response {
     _ = state;
@@ -257,7 +257,7 @@ fn getUserById(
 
 fn getTeamUser(
     ctx: volt.Context,
-    state: *AppState,
+    state: AppState,
     team_id: volt.extract.RouteParam("team_id"),
     user_id: volt.extract.RouteParam("user_id")
 ) !volt.Response {
@@ -298,7 +298,7 @@ const UserFilters = struct {
 
 fn listUsers(
     ctx: volt.Context,
-    state: *AppState,
+    state: AppState,
     filters_query: volt.extract.TypedQuery(UserFilters)
 ) !volt.Response {
     _ = state;
@@ -333,7 +333,7 @@ return volt.Response.internal_server_error(ctx.req_arena, "Something went wrong"
 ## Application State
 
 Use `Router(State)` to provide application state to handlers. For shared mutable
-state, pass a pointer type (for example `*AppState`) as the router state.
+state, you can pass a pointer type (for example `*AppState`) as the router state parameter.
 
 ```zig
 const AppState = struct {
@@ -351,10 +351,10 @@ const AppState = struct {
 };
 
 const Server = volt.Server;
-const AppRouter = volt.Router(*AppState);
+const AppRouter = volt.Router(AppState);
 
 // Access state in handlers
-fn myHandler(ctx: volt.Context, state: *AppState) !volt.Response {
+fn myHandler(ctx: volt.Context, state: AppState) !volt.Response {
     try state.mutex.lock(ctx.io);
     defer state.mutex.unlock(ctx.io);
 
@@ -374,27 +374,27 @@ const volt = @import("volt");
 const AppState = struct {};
 
 const Server = volt.Server;
-const AppRouter = volt.Router(*AppState);
+const AppRouter = volt.Router(AppState);
 
 pub fn main(init: std.process.Init) !void {
     var state: AppState = .{};
     var server = try Server.init(init.io, .{});
-    var router: AppRouter = .init(init.gpa, &state);
+    var router: AppRouter = .init(init.gpa, state);
     defer router.deinit(init.gpa);
 
     try router.get(init.gpa, "/", &indexHandler);
     try router.post(init.gpa, "/echo", &echoHandler);
 
     const address = try std.Io.net.IpAddress.parse("127.0.0.1", 8080);
-    try server.listen(*AppState, init.gpa, address, &router);
+    try server.listen(AppState, init.gpa, address, &router);
 }
 
-fn indexHandler(ctx: volt.Context, state: *AppState) !volt.Response {
+fn indexHandler(ctx: volt.Context, state: AppState) !volt.Response {
     _ = state;
     return .text(ctx.req_arena, .ok, "Hello from Volt!", null);
 }
 
-fn echoHandler(ctx: volt.Context, state: *AppState, body: volt.extract.Json(EchoRequest)) !volt.Response {
+fn echoHandler(ctx: volt.Context, state: AppState, body: volt.extract.Json(EchoRequest)) !volt.Response {
     _ = state;
 
     const request = body.result catch |err| {
@@ -418,26 +418,26 @@ const volt = @import("volt");
 const AppState = struct {};
 
 const Server = volt.Server;
-const AppRouter = volt.Router(*AppState);
+const AppRouter = volt.Router(AppState);
 
 pub fn main(init: std.process.Init) !void {
     var state: AppState = .{};
     var server = try Server.init(init.io, .{});
-    var router: AppRouter = .init(init.gpa, &state);
+    var router: AppRouter = .init(init.gpa, state);
     defer router.deinit(init.gpa);
 
     try router.get(init.gpa, "/ws", &webSocketHandler);
 
     const address = try std.Io.net.IpAddress.parse("127.0.0.1", 8080);
-    try server.listen(*AppState, init.gpa, address, &router);
+    try server.listen(AppState, init.gpa, address, &router);
 }
 
-fn webSocketHandler(ctx: volt.Context, state: *AppState, ws: volt.extract.WebSocket) !volt.Response {
+fn webSocketHandler(ctx: volt.Context, state: AppState, ws: volt.extract.WebSocket) !volt.Response {
     try ws.onConnected(handleConnection, .{ ctx, state });
     return ws.intoResponse();
 }
 
-fn handleConnection(ctx: volt.Context, state: *AppState, socket: *std.http.Server.WebSocket) !void {
+fn handleConnection(ctx: volt.Context, state: AppState, socket: *std.http.Server.WebSocket) !void {
     _ = ctx;
     _ = state;
     while (true) {
@@ -478,7 +478,7 @@ const AppState = struct {
     }
 };
 
-fn myHandler(ctx: volt.Context, state: *AppState) !volt.Response {
+fn myHandler(ctx: volt.Context, state: AppState) !volt.Response {
     // Use req_arena for temporary work
     const temp_buffer = try ctx.req_arena.alloc(u8, 1024);
     _ = temp_buffer;
