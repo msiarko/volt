@@ -94,14 +94,12 @@ pub const extract = struct {
     ///
     /// fn handleRequest(ctx: Context, person: Json(Person)) !Response {
     ///     const payload = person.result catch |e| {
-    ///         _ = e;
     ///         // Handle JSON or validation error.
-    ///         return Response.badRequest();
+    ///         return Response.text(ctx.req_arena, .bad_request, @errorName(e), null);
     ///     };
     ///
-    ///     _ = ctx;
     ///     _ = payload;
-    ///     return Response.ok();
+    ///     return Response.ok(ctx.req_arena, null, null);
     /// }
     /// ```
     pub const Json = json.Json;
@@ -124,13 +122,11 @@ pub const extract = struct {
     /// ```zig
     /// fn handleRequest(ctx: Context, filter: Query("filter")) !Response {
     ///     const maybe_filter = filter.result catch |e| {
-    ///         _ = e;
-    ///         return Response.badRequest();
+    ///         return Response.text(ctx.req_arena, .bad_request, @errorName(e), null);
     ///     };
     ///
-    ///     _ = ctx;
     ///     _ = maybe_filter;
-    ///     return Response.ok();
+    ///     return Response.ok(ctx.req_arena, null, null);
     /// }
     /// ```
     pub const Query = query.Query;
@@ -160,13 +156,11 @@ pub const extract = struct {
     ///
     /// fn handleRequest(ctx: Context, filter: TypedQuery(Filter)) !Response {
     ///     const maybe_filter = filter.result catch |e| {
-    ///         _ = e;
-    ///         return Response.badRequest();
+    ///         return Response.text(ctx.req_arena, .bad_request, @errorName(e), null);
     ///     };
     ///
-    ///     _ = ctx;
     ///     _ = maybe_filter;
-    ///     return Response.ok();
+    ///     return Response.ok(ctx.req_arena, null, null);
     /// }
     /// ```
     pub const TypedQuery = typed_query.TypedQuery;
@@ -182,12 +176,12 @@ pub const extract = struct {
     /// - as a router handler parameter (automatic injection), or
     /// - manually inside a handler body with `WebSocket{ .result = WebSocket.init(ctx) }`.
     ///
-    /// In handlers, call `onConnected` to run your connection routine, then return `intoResponse()`.
+    /// In handlers, call `onConnected` to run your connection routine, then return `Response.empty`.
     ///
     /// ```zig
     /// fn handleRequest(ctx: Context, ws: WebSocket) !Response {
     ///     try ws.onConnected(handleWebSocket, .{ ctx });
-    ///     return ws.intoResponse();
+    ///     return Response.empty;
     /// }
     /// ```
     pub const WebSocket = @import("extractors/WebSocket.zig");
@@ -250,13 +244,11 @@ pub const extract = struct {
     /// ```zig
     /// fn handleRequest(ctx: Context, form: Form(Person)) !Response {
     ///     const form_data = form.result catch |e| {
-    ///         _ = e;
-    ///         return Response.badRequest();
+    ///         return Response.text(ctx.req_arena, .bad_request, @errorName(e), null);
     ///     };
     ///
-    ///     _ = ctx;
     ///     _ = form_data;
-    ///     return Response.ok();
+    ///     return Response.ok(ctx.req_arena, null, null);
     /// }
     /// ```
     pub const Form = form.Form;
@@ -292,18 +284,21 @@ pub const extract = struct {
 /// ```
 pub const Router = router.Router;
 
-/// Unified response type that can represent HTTP responses or WebSocket upgrades.
+/// HTTP response type used by handlers.
 ///
-/// This union allows handlers to return either regular HTTP responses with
-/// status codes, content, and headers, or trigger WebSocket upgrades.
+/// Use the helper constructors (`json`, `text`, `html`, `ok`,
+/// `internal_server_error`) for standard HTTP responses.
+///
+/// For handlers that already responded directly (for example after a successful
+/// WebSocket upgrade), return `Response.empty`.
 ///
 /// Example:
 /// ```zig
 /// // HTTP JSON response
 /// return Response.json(arena, .ok, "{\"message\": \"Hello\"}", null);
 ///
-/// // WebSocket upgrade
-/// return web_socket.intoResponse();
+/// // For flows that already wrote to the socket (e.g. WebSocket upgrade)
+/// return Response.empty;
 /// ```
 pub const Response = @import("Response.zig");
 

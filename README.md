@@ -165,7 +165,7 @@ fn websocketHandler(
     ws: volt.extract.WebSocket
 ) !volt.Response {
     try ws.onConnected(handleConnection, .{ctx, state});
-    return ws.intoResponse();
+    return volt.Response.empty;
 }
 
 fn handleConnection(ctx: volt.Context, state: AppState, socket: *std.http.Server.WebSocket) !void {
@@ -328,6 +328,10 @@ return volt.Response.text(ctx.req_arena, .ok, "Hello, World!", null);
 
 // Error responses
 return volt.Response.internal_server_error(ctx.req_arena, "Something went wrong", null);
+
+// No-op response for handlers that already wrote to the socket
+// (for example after a successful WebSocket upgrade)
+return volt.Response.empty;
 ```
 
 ## Application State
@@ -351,10 +355,10 @@ const AppState = struct {
 };
 
 const Server = volt.Server;
-const AppRouter = volt.Router(AppState);
+const AppRouter = volt.Router(*AppState);
 
 // Access state in handlers
-fn myHandler(ctx: volt.Context, state: AppState) !volt.Response {
+fn myHandler(ctx: volt.Context, state: *AppState) !volt.Response {
     try state.mutex.lock(ctx.io);
     defer state.mutex.unlock(ctx.io);
 
@@ -374,27 +378,27 @@ const volt = @import("volt");
 const AppState = struct {};
 
 const Server = volt.Server;
-const AppRouter = volt.Router(AppState);
+const AppRouter = volt.Router(*AppState);
 
 pub fn main(init: std.process.Init) !void {
     var state: AppState = .{};
     var server = try Server.init(init.io, .{});
-    var router: AppRouter = .init(init.gpa, state);
+    var router: AppRouter = .init(init.gpa, &state);
     defer router.deinit(init.gpa);
 
     try router.get(init.gpa, "/", &indexHandler);
     try router.post(init.gpa, "/echo", &echoHandler);
 
     const address = try std.Io.net.IpAddress.parse("127.0.0.1", 8080);
-    try server.listen(AppState, init.gpa, address, &router);
+    try server.listen(*AppState, init.gpa, address, &router);
 }
 
-fn indexHandler(ctx: volt.Context, state: AppState) !volt.Response {
+fn indexHandler(ctx: volt.Context, state: *AppState) !volt.Response {
     _ = state;
     return .text(ctx.req_arena, .ok, "Hello from Volt!", null);
 }
 
-fn echoHandler(ctx: volt.Context, state: AppState, body: volt.extract.Json(EchoRequest)) !volt.Response {
+fn echoHandler(ctx: volt.Context, state: *AppState, body: volt.extract.Json(EchoRequest)) !volt.Response {
     _ = state;
 
     const request = body.result catch |err| {
@@ -418,26 +422,26 @@ const volt = @import("volt");
 const AppState = struct {};
 
 const Server = volt.Server;
-const AppRouter = volt.Router(AppState);
+const AppRouter = volt.Router(*AppState);
 
 pub fn main(init: std.process.Init) !void {
     var state: AppState = .{};
     var server = try Server.init(init.io, .{});
-    var router: AppRouter = .init(init.gpa, state);
+    var router: AppRouter = .init(init.gpa, &state);
     defer router.deinit(init.gpa);
 
     try router.get(init.gpa, "/ws", &webSocketHandler);
 
     const address = try std.Io.net.IpAddress.parse("127.0.0.1", 8080);
-    try server.listen(AppState, init.gpa, address, &router);
+    try server.listen(*AppState, init.gpa, address, &router);
 }
 
-fn webSocketHandler(ctx: volt.Context, state: AppState, ws: volt.extract.WebSocket) !volt.Response {
+fn webSocketHandler(ctx: volt.Context, state: *AppState, ws: volt.extract.WebSocket) !volt.Response {
     try ws.onConnected(handleConnection, .{ ctx, state });
-    return ws.intoResponse();
+    return volt.Response.empty;
 }
 
-fn handleConnection(ctx: volt.Context, state: AppState, socket: *std.http.Server.WebSocket) !void {
+fn handleConnection(ctx: volt.Context, state: *AppState, socket: *std.http.Server.WebSocket) !void {
     _ = ctx;
     _ = state;
     while (true) {
@@ -499,7 +503,7 @@ Volt is built around several key components:
 - **Router**: Type-safe routing, request handling, and parameter injection
 - **Context**: Request execution context with I/O and memory resources
 - **Extract**: Automatic parameter extraction (JSON, WebSocket, Query, TypedQuery, Header, RouteParam, Form)
-- **Response**: Unified response type for HTTP and WebSocket responses
+- **Response**: HTTP response type with helper constructors and `Response.empty` for already-handled flows
 
 ## Status & Roadmap
 
