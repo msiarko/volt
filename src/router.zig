@@ -2,8 +2,7 @@ const std = @import("std");
 const Request = std.http.Server.Request;
 const Allocator = std.mem.Allocator;
 const HttpRequest = std.http.Server.Request;
-const response = @import("response.zig");
-const Response = response.Response;
+const Response = @import("Response.zig");
 const WebSocket = @import("extractors/WebSocket.zig");
 const Context = @import("Context.zig");
 const ArgsTuple = std.meta.ArgsTuple;
@@ -25,7 +24,7 @@ const extractor_resolvers = .{
     RouteParamResolver,
 };
 
-pub fn matches(comptime Extractor: type, comptime EXTRACTOR_ID: []const u8) bool {
+fn matches(comptime Extractor: type, comptime EXTRACTOR_ID: []const u8) bool {
     if (!@hasDecl(Extractor, "ID")) return false;
     return std.mem.eql(u8, @field(Extractor, "ID"), EXTRACTOR_ID);
 }
@@ -259,34 +258,73 @@ pub fn Router(comptime State: type) type {
 
             const target = normalizedTarget(ctx.raw_req.head.target);
             const method = ctx.raw_req.head.method;
-            var path_matched = false;
             var allowed_methods = std.EnumSet(std.http.Method).empty;
 
-            if (self.routes.get(target)) |route_entry| {
-                path_matched = true;
-                if (route_entry.handlers.get(method)) |handler| {
-                    return executeHandler(handler, ctx, self.state);
-                }
-
-                collectAllowedMethods(&allowed_methods, route_entry.handlers);
+            if (self.findHandler(&ctx, target, method, &allowed_methods)) |handler| {
+                return executeHandler(handler, ctx, self.state);
             }
 
-            for (self.parametric_routes.items) |*route| {
-                if (route.match(target)) {
-                    path_matched = true;
-                    if (route.entry.handlers.get(method)) |handler| {
-                        ctx.route_pattern = route.pattern;
-                        return executeHandler(handler, ctx, self.state);
-                    }
-                    collectAllowedMethods(&allowed_methods, route.entry.handlers);
-                }
-            }
-
-            if (path_matched) {
+            if (allowed_methods.count() > 0) {
                 return respondMethodNotAllowed(ctx.raw_req, allowed_methods);
             }
 
             return respondNotFound(ctx.raw_req);
+        }
+
+        fn findHandler(
+            self: *const Self,
+            ctx: *Context,
+            target: []const u8,
+            method: std.http.Method,
+            allowed_methods: *std.EnumSet(std.http.Method),
+        ) ?Handler {
+            if (self.findRouteHandler(target, method, allowed_methods)) |handler| {
+                return handler;
+            }
+
+            if (self.findParametricRouteHandler(ctx, target, method, allowed_methods)) |handler| {
+                return handler;
+            }
+
+            return null;
+        }
+
+        fn findRouteHandler(
+            self: *const Self,
+            target: []const u8,
+            method: std.http.Method,
+            allowed_methods: *std.EnumSet(std.http.Method),
+        ) ?Handler {
+            if (self.routes.get(target)) |route_entry| {
+                if (route_entry.handlers.get(method)) |handler| {
+                    return handler;
+                }
+
+                collectAllowedMethods(allowed_methods, route_entry.handlers);
+            }
+
+            return null;
+        }
+
+        fn findParametricRouteHandler(
+            self: *const Self,
+            ctx: *Context,
+            target: []const u8,
+            method: std.http.Method,
+            allowed_methods: *std.EnumSet(std.http.Method),
+        ) ?Handler {
+            for (self.parametric_routes.items) |*route| {
+                if (route.match(target)) {
+                    if (route.entry.handlers.get(method)) |handler| {
+                        ctx.route_pattern = route.pattern;
+                        return handler;
+                    }
+
+                    collectAllowedMethods(allowed_methods, route.entry.handlers);
+                }
+            }
+
+            return null;
         }
 
         fn executeHandler(handler: Router(State).Handler, ctx: Context, state: State) !void {
@@ -296,7 +334,7 @@ pub fn Router(comptime State: type) type {
                 return;
             };
 
-            try response.respond(ctx.raw_req, res);
+            try res.send(ctx.raw_req);
         }
 
         fn normalizedTarget(target: []const u8) []const u8 {
@@ -509,8 +547,7 @@ test "handleRequest returns 404 for unknown route" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var req = try http_server.receiveHead();
 
-    try TestRouter.handleRequest(&router, std.testing.io, std.testing.allocator, &req);
-    try stream_buf_writer.flush();
+    try router.handleRequest(std.testing.io, std.testing.allocator, &req);
 
     const output = write_buffer[0..stream_buf_writer.end];
     try std.testing.expect(std.mem.find(u8, output, "404") != null);
@@ -536,8 +573,7 @@ test "handleRequest returns 405 for method mismatch" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var req = try http_server.receiveHead();
 
-    try TestRouter.handleRequest(&router, std.testing.io, std.testing.allocator, &req);
-    try stream_buf_writer.flush();
+    try router.handleRequest(std.testing.io, std.testing.allocator, &req);
 
     const output = write_buffer[0..stream_buf_writer.end];
     try std.testing.expect(std.mem.find(u8, output, "405") != null);
@@ -565,8 +601,7 @@ test "handleRequest returns 405 with Allow header for parametric route mismatch"
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var req = try http_server.receiveHead();
 
-    try TestRouter.handleRequest(&router, std.testing.io, std.testing.allocator, &req);
-    try stream_buf_writer.flush();
+    try router.handleRequest(std.testing.io, std.testing.allocator, &req);
 
     const output = write_buffer[0..stream_buf_writer.end];
     try std.testing.expect(std.mem.find(u8, output, "405") != null);
@@ -599,8 +634,7 @@ test "handleRequest falls back to parametric method when exact path lacks method
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var req = try http_server.receiveHead();
 
-    try TestRouter.handleRequest(&router, std.testing.io, std.testing.allocator, &req);
-    try stream_buf_writer.flush();
+    try router.handleRequest(std.testing.io, std.testing.allocator, &req);
 
     const output = write_buffer[0..stream_buf_writer.end];
     try std.testing.expect(std.mem.find(u8, output, "200") != null);
@@ -633,8 +667,7 @@ test "handleRequest returns combined Allow header for overlapping path matches" 
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var req = try http_server.receiveHead();
 
-    try TestRouter.handleRequest(&router, std.testing.io, std.testing.allocator, &req);
-    try stream_buf_writer.flush();
+    try router.handleRequest(std.testing.io, std.testing.allocator, &req);
 
     const output = write_buffer[0..stream_buf_writer.end];
     try std.testing.expect(std.mem.find(u8, output, "405") != null);
@@ -667,12 +700,12 @@ test "handleRequest ignores websocket extractor errors" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var req = try http_server.receiveHead();
 
-    try TestRouter.handleRequest(&router, std.testing.io, std.testing.allocator, &req);
-    try stream_buf_writer.flush();
+    try router.handleRequest(std.testing.io, std.testing.allocator, &req);
+
     try std.testing.expectEqual(@as(usize, 0), stream_buf_writer.end);
 }
 
-test "handleRequest prefers exact route over parametric overlap" {
+test "findHandler prefers exact route over parametric overlap" {
     var router: TestRouter = .init(std.testing.allocator, {});
     defer router.deinit(std.testing.allocator);
 
@@ -697,8 +730,7 @@ test "handleRequest prefers exact route over parametric overlap" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var req = try http_server.receiveHead();
 
-    try TestRouter.handleRequest(&router, std.testing.io, std.testing.allocator, &req);
-    try stream_buf_writer.flush();
+    try router.handleRequest(std.testing.io, std.testing.allocator, &req);
 
     const output = write_buffer[0..stream_buf_writer.end];
     try std.testing.expect(std.mem.find(u8, output, "exact") != null);
@@ -732,8 +764,7 @@ test "handleRequest applies parametric precedence by literal segments" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var req = try http_server.receiveHead();
 
-    try TestRouter.handleRequest(&router, std.testing.io, std.testing.allocator, &req);
-    try stream_buf_writer.flush();
+    try router.handleRequest(std.testing.io, std.testing.allocator, &req);
 
     const output = write_buffer[0..stream_buf_writer.end];
     try std.testing.expect(std.mem.find(u8, output, "users") != null);
@@ -776,8 +807,7 @@ test "literal colon segment is treated as exact route" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var req = try http_server.receiveHead();
 
-    try TestRouter.handleRequest(&router, std.testing.io, std.testing.allocator, &req);
-    try stream_buf_writer.flush();
+    try router.handleRequest(std.testing.io, std.testing.allocator, &req);
 
     const output = write_buffer[0..stream_buf_writer.end];
     try std.testing.expect(std.mem.find(u8, output, "literal") != null);
@@ -804,8 +834,7 @@ test "router duplicates route path keys on registration" {
     var http_server = std.http.Server.init(&stream_buf_reader, &stream_buf_writer);
     var req = try http_server.receiveHead();
 
-    try TestRouter.handleRequest(&router, std.testing.io, std.testing.allocator, &req);
-    try stream_buf_writer.flush();
+    try router.handleRequest(std.testing.io, std.testing.allocator, &req);
 
     const output = write_buffer[0..stream_buf_writer.end];
     try std.testing.expect(std.mem.find(u8, output, "owned") != null);

@@ -3,7 +3,6 @@ const Allocator = std.mem.Allocator;
 const Router = @import("router.zig").Router;
 const IpAddress = std.Io.net.IpAddress;
 const ListenOptions = std.Io.net.IpAddress.ListenOptions;
-const response = @import("response.zig");
 
 /// Configuration options for the HTTP server, such as timeouts and limits.
 pub const ServerOptions = struct {

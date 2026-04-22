@@ -22,7 +22,6 @@ const header = @import("extractors/header.zig");
 const route_param = @import("extractors/route_param.zig");
 const form = @import("extractors/form.zig");
 const router = @import("router.zig");
-const response = @import("response.zig");
 
 /// HTTP server runtime that accepts connections and dispatches requests to a Router.
 ///
@@ -306,7 +305,7 @@ pub const Router = router.Router;
 /// // WebSocket upgrade
 /// return web_socket.intoResponse();
 /// ```
-pub const Response = response.Response;
+pub const Response = @import("Response.zig");
 
 test {
     const testing = std.testing;
@@ -317,6 +316,6 @@ test {
     _ = testing.refAllDecls(route_param);
     _ = testing.refAllDecls(form);
     _ = testing.refAllDecls(router);
-    _ = testing.refAllDecls(response);
+    _ = testing.refAllDecls(Response);
     _ = testing.refAllDecls(Server);
 }
