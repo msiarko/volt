@@ -12,8 +12,7 @@ const EXTRACTOR_ID: []const u8 = "VOLT_TYPED_QUERY_EXTRACTOR";
 const TypedQueryError = AllocatorError || utils.ParseError;
 
 fn assert(comptime T: type) void {
-    const type_info = @typeInfo(T);
-    if (type_info != .@"struct") {
+    if (@typeInfo(T) != .@"struct") {
         @compileError("Type is not a struct");
     }
 

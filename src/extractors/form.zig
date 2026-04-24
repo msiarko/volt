@@ -40,14 +40,12 @@ fn extractMultipartFormData(
             var part_header_it = std.mem.splitSequence(u8, headers, "\r\n");
             while (part_header_it.next()) |header| {
                 if (std.mem.startsWith(u8, header, CONTENT_DISPOSITION)) {
-                    var name_start = std.mem.findScalar(u8, header, '"') orelse
+                    const end = header.len - 1;
+                    const val = header[CONTENT_DISPOSITION.len + 1 .. end];
+                    const start = std.mem.findScalarLast(u8, val, '"') orelse
                         return FormError.MalformedMultipartBody;
 
-                    name_start += 1;
-                    const name_end = std.mem.findScalarLast(u8, header[name_start..], '"') orelse
-                        return FormError.MalformedMultipartBody;
-
-                    break :blk header[name_start .. name_start + name_end];
+                    break :blk val[start + 1 ..];
                 }
             }
 

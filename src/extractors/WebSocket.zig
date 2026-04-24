@@ -27,14 +27,12 @@ pub fn init(ctx: Context) !WebSocket {
 
 pub fn onConnected(self: *const Self, handler: anytype, args: anytype) !void {
     var socket = try self.result;
-    const Args = @TypeOf(args);
-    const args_type_info = @typeInfo(Args);
+    const args_type_info = @typeInfo(@TypeOf(args));
     if (args_type_info != .@"struct" and !args_type_info.@"struct".is_tuple) {
         @compileError("args must be a tuple");
     }
 
-    const Handler = @TypeOf(handler);
-    const handler_type_info = @typeInfo(Handler);
+    const handler_type_info = @typeInfo(@TypeOf(handler));
     if (handler_type_info != .@"fn") {
         @compileError("handler must be a function");
     }

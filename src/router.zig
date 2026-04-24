@@ -38,11 +38,6 @@ fn getArgsTypes(func_params: []const FnParam) []const type {
     return &func_param_types;
 }
 
-fn funcParams(comptime T: type) []const FnParam {
-    const func_type_info = @typeInfo(T).pointer.child;
-    return @typeInfo(func_type_info).@"fn".params;
-}
-
 pub fn Router(comptime State: type) type {
     return struct {
         const Self = @This();
@@ -483,24 +478,23 @@ pub fn Router(comptime State: type) type {
         }
 
         fn makeHandler(handler: anytype) Handler {
-            const FuncPtr = @TypeOf(handler);
-            const func_ptr_info = @typeInfo(FuncPtr);
+            const FnPtr = @TypeOf(handler);
+            const func_ptr_info = @typeInfo(FnPtr);
             if (func_ptr_info != .pointer or !func_ptr_info.pointer.is_const) {
                 @compileError("handler must be a const pointer type");
             }
 
-            const func_type_info = @typeInfo(func_ptr_info.pointer.child);
+            const func_type_info = @typeInfo(std.meta.Child(FnPtr));
             if (func_type_info != .@"fn") {
                 @compileError("handler must be a const pointer type to a function");
             }
 
-            const RetType = func_type_info.@"fn".return_type.?;
-            const ret_type_info = @typeInfo(RetType);
+            const ret_type_info = @typeInfo(func_type_info.@"fn".return_type.?);
             if (ret_type_info != .error_union or ret_type_info.error_union.payload != Response) {
                 @compileError("handler must return !Response");
             }
 
-            return .init(FuncPtr, @ptrCast(handler));
+            return .init(FnPtr, @ptrCast(handler));
         }
     };
 }

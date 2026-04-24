@@ -65,10 +65,6 @@ pub fn Json(comptime T: type) type {
 
 pub const Resolver = struct {
     pub const ID: []const u8 = EXTRACTOR_ID;
-    // pub fn matches(comptime Extractor: type) bool {
-    //     if (!@hasDecl(Extractor, "ID")) return false;
-    //     return std.mem.eql(u8, @field(Extractor, "ID"), EXTRACTOR_ID);
-    // }
 
     pub fn resolve(comptime Extractor: type, ctx: Context) Extractor {
         comptime assert(@hasDecl(Extractor, "PAYLOAD_TYPE"));
