@@ -57,7 +57,7 @@ pub fn Router(comptime State: type) type {
             vtable: VTable,
 
             pub fn init(comptime FnPtr: type, h: *const anyopaque) @This() {
-                const Fn = @typeInfo(FnPtr).pointer.child;
+                const Fn = std.meta.Child(FnPtr);
                 const impl = struct {
                     fn exec(ptr: *const anyopaque, ctx: Context, state: State) !Response {
                         var args: ArgsTuple(Fn) = undefined;
@@ -436,11 +436,9 @@ pub fn Router(comptime State: type) type {
         fn isParametricPath(path: []const u8) bool {
             const normalized = if (path.len > 0 and path[0] == '/') path[1..] else path;
             var it = std.mem.splitScalar(u8, normalized, '/');
-            while (it.next()) |seg| {
+            return while (it.next()) |seg| {
                 if (seg.len > 0 and seg[0] == ':') return true;
-            }
-
-            return false;
+            } else false;
         }
 
         fn parseSegments(allocator: Allocator, pattern: []const u8) !struct { segments: []Segment, literal_count: usize } {

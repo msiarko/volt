@@ -11,15 +11,13 @@ pub const QueryIterator = struct {
     parts: std.mem.SplitIterator(u8, .scalar),
 
     pub fn next(self: *QueryIterator) ?QueryEntry {
-        while (self.parts.next()) |part| {
+        return while (self.parts.next()) |part| {
             var key_value = std.mem.splitScalar(u8, part, '=');
             const key = key_value.next() orelse continue;
-            const raw_value = key_value.next() orelse return .{ .key = key, .value = null };
+            const raw_value = key_value.next() orelse break .{ .key = key, .value = null };
             const value = if (raw_value.len == 0) null else raw_value;
-            return .{ .key = key, .value = value };
-        }
-
-        return null;
+            break .{ .key = key, .value = value };
+        } else null;
     }
 };
 

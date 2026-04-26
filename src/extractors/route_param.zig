@@ -36,18 +36,16 @@ fn resolveValue(
 
     var req_it = std.mem.splitScalar(u8, req_trimmed, '/');
     var pattern_it = std.mem.splitScalar(u8, pattern_trimmed, '/');
-    while (pattern_it.next()) |pat_seg| {
-        const req_seg = req_it.next() orelse return null;
+    return while (pattern_it.next()) |pat_seg| {
+        const req_seg = req_it.next() orelse break null;
         if (pat_seg.len > 0 and pat_seg[0] == ':') {
             if (std.mem.eql(u8, pat_seg[1..], name)) {
-                return req_seg;
+                break req_seg;
             }
         } else if (!std.mem.eql(u8, pat_seg, req_seg)) {
-            return null;
+            break null;
         }
-    }
-
-    return null;
+    } else null;
 }
 
 fn stripQuery(target: []const u8) []const u8 {

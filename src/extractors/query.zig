@@ -12,16 +12,14 @@ const EXTRACTOR_ID: []const u8 = "VOLT_QUERY_EXTRACTOR";
 
 fn extract(comptime name: []const u8, arena: Allocator, req: *Request) AllocatorError!?[]const u8 {
     var query_it = utils.queryIterator(req.head.target) orelse return null;
-    while (query_it.next()) |entry| {
+    return while (query_it.next()) |entry| {
         const value = entry.value orelse continue;
         const key = try utils.decodeUrl(arena, entry.key);
         if (std.ascii.eqlIgnoreCase(key, name)) {
             const decoded_value = try utils.decodeUrl(arena, value);
-            return decoded_value;
+            break decoded_value;
         }
-    }
-
-    return null;
+    } else null;
 }
 
 pub fn Query(comptime name: []const u8) type {

@@ -67,7 +67,7 @@ pub fn listen(
     try address.format(&fixed_writer);
     try fixed_writer.flush();
 
-    std.log.info("Server is listening on http://{s}", .{buffer[0..fixed_writer.end]});
+    std.log.info("Listening on http://{s}", .{buffer[0..fixed_writer.end]});
     try self.acceptConnections(State, allocator, router, &server, &tasks);
     const graceful_shutdown_timeout: std.Io.Clock.Duration = .{
         .raw = std.Io.Duration.fromSeconds(@intCast(self.options.shutdown_timeout_seconds)),

@@ -9,13 +9,11 @@ const EXTRACTOR_ID: []const u8 = "VOLT_HEADER_EXTRACTOR";
 
 fn extract(comptime name: []const u8, req: *Request) Header(name) {
     var header_it = req.iterateHeaders();
-    while (header_it.next()) |entry| {
+    return while (header_it.next()) |entry| {
         if (std.ascii.eqlIgnoreCase(entry.name, name)) {
-            return .{ .value = entry.value };
+            break .{ .value = entry.value };
         }
-    }
-
-    return .{ .value = null };
+    } else .{ .value = null };
 }
 
 pub fn Header(comptime name: []const u8) type {

@@ -47,9 +47,7 @@ fn extractMultipartFormData(
 
                     break :blk val[start + 1 ..];
                 }
-            }
-
-            unreachable;
+            } else unreachable;
         };
 
         const value = it.next() orelse return FormError.MalformedMultipartBody;
