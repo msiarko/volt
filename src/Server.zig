@@ -90,7 +90,7 @@ fn acceptConnections(
             else => return err,
         };
 
-        tasks.async(self.io, Router(State).handle, .{ router, self.io, allocator, conn });
+        try tasks.concurrent(self.io, Router(State).handle, .{ router, self.io, allocator, conn });
     }
 }
 
