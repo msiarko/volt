@@ -230,6 +230,7 @@ pub fn Router(comptime State: type) type {
             var http_server = std.http.Server.init(&stream_buf_reader.interface, &stream_buf_writer.interface);
             while (true) {
                 var req = http_server.receiveHead() catch |err| {
+                    if (err == error.HttpConnectionClosing) break;
                     std.log.err("Failed to receive head: {}", .{err});
                     break;
                 };
