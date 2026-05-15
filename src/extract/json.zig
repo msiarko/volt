@@ -6,7 +6,7 @@ const AllocatorError = std.mem.Allocator.Error;
 const ReaderError = std.Io.Reader.Error;
 const ParseError = std.json.ParseError(std.json.Scanner);
 
-const Context = @import("../Context.zig");
+const Context = @import("core").Context;
 
 const EXTRACTOR_ID: []const u8 = "VOLT_JSON_EXTRACTOR";
 

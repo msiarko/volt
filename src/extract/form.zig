@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 const AllocatorError = std.mem.Allocator.Error;
 const ReadAllocError = std.Io.Reader.ReadAllocError;
 const assert = std.debug.assert;
-const Context = @import("../Context.zig");
+const Context = @import("core").Context;
 const utils = @import("utils.zig");
 const Request = std.http.Server.Request;
 

@@ -7,7 +7,7 @@ const WebSocket = std.http.Server.WebSocket;
 const WriterError = std.Io.Writer.Error;
 const ExpectedContinueError = std.http.Server.Request.ExpectContinueError;
 
-const Context = @import("../Context.zig");
+const Context = @import("core").Context;
 const utils = @import("utils.zig");
 
 pub const WebSocketUpgradeError = error{

@@ -5,7 +5,7 @@ const Request = std.http.Server.Request;
 const StructField = std.builtin.Type.StructField;
 const AllocatorError = std.mem.Allocator.Error;
 
-const Context = @import("../Context.zig");
+const Context = @import("core").Context;
 const utils = @import("utils.zig");
 
 const EXTRACTOR_ID: []const u8 = "VOLT_QUERY_EXTRACTOR";

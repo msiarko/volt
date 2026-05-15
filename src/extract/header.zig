@@ -3,7 +3,7 @@ const Request = std.http.Server.Request;
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
-const Context = @import("../Context.zig");
+const Context = @import("core").Context;
 
 const EXTRACTOR_ID: []const u8 = "VOLT_HEADER_EXTRACTOR";
 

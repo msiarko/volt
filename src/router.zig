@@ -2,18 +2,20 @@ const std = @import("std");
 const Request = std.http.Server.Request;
 const Allocator = std.mem.Allocator;
 const HttpRequest = std.http.Server.Request;
-const Response = @import("Response.zig");
-const WebSocket = @import("extractors/WebSocket.zig");
-const Context = @import("Context.zig");
+const core = @import("core");
+const extract = @import("extract");
+const Response = core.Response;
+const Context = core.Context;
 const ArgsTuple = std.meta.ArgsTuple;
 const FnParam = std.builtin.Type.Fn.Param;
 
-const JsonResolver = @import("extractors/json.zig").Resolver;
-const QueryResolver = @import("extractors/query.zig").Resolver;
-const TypedQueryResolver = @import("extractors/typed_query.zig").Resolver;
-const HeaderResolver = @import("extractors/header.zig").Resolver;
-const RouteParamResolver = @import("extractors/route_param.zig").Resolver;
-const FormResolver = @import("extractors/form.zig").Resolver;
+const WebSocket = extract.WebSocket;
+const JsonResolver = extract.json.Resolver;
+const QueryResolver = extract.query.Resolver;
+const TypedQueryResolver = extract.typed_query.Resolver;
+const HeaderResolver = extract.header.Resolver;
+const RouteParamResolver = extract.route_param.Resolver;
+const FormResolver = extract.form.Resolver;
 
 const extractor_resolvers = .{
     JsonResolver,
@@ -511,7 +513,7 @@ fn isMemberOfErrorSet(comptime T: type, err: anyerror) bool {
 }
 
 const TestRouter = Router(void);
-const RouteParam = @import("extractors/route_param.zig").RouteParam;
+const RouteParam = extract.route_param.RouteParam;
 
 test "isMemberOfErrorSet returns true for member" {
     const AppError = error{ NotFound, InvalidPayload };
