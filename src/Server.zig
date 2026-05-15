@@ -3,6 +3,7 @@ const Allocator = std.mem.Allocator;
 const Router = @import("router.zig").Router;
 const IpAddress = std.Io.net.IpAddress;
 const ListenOptions = std.Io.net.IpAddress.ListenOptions;
+const log = std.log;
 
 /// Configuration options for the HTTP server, such as timeouts and limits.
 pub const ServerOptions = struct {
@@ -67,7 +68,7 @@ pub fn listen(
     try address.format(&fixed_writer);
     try fixed_writer.flush();
 
-    std.log.info("Listening on http://{s}", .{buffer[0..fixed_writer.end]});
+    log.info("Listening on http://{s}", .{buffer[0..fixed_writer.end]});
     try self.acceptConnections(State, allocator, router, &server, &tasks);
     const graceful_shutdown_timeout: std.Io.Clock.Duration = .{
         .raw = std.Io.Duration.fromSeconds(@intCast(self.options.shutdown_timeout_seconds)),
@@ -108,7 +109,7 @@ fn gracefulShutdown(self: *Self, tasks: *std.Io.Group, timeout: std.Io.Clock.Dur
     switch (result) {
         .tasks_done => |await_result| try await_result,
         .timeout => |timeout_result| {
-            std.log.warn(
+            log.warn(
                 "Graceful shutdown timeout reached after {}ms; canceling remaining connection tasks",
                 .{timeout.raw.toMilliseconds()},
             );

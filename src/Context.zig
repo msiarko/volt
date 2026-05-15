@@ -1,4 +1,5 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const Request = std.http.Server.Request;
 
 const Self = @This();
@@ -9,7 +10,7 @@ io: std.Io,
 /// Arena allocator scoped to the current request.
 /// All memory is freed automatically at the end of the request.
 /// Preferred for most handler operations.
-req_arena: std.mem.Allocator,
+req_arena: Allocator,
 
 /// Raw HTTP request. Valid only for the lifetime of the current request.
 /// Use this to call extractors manually inside handler bodies, or to take
@@ -31,7 +32,7 @@ route_pattern: ?[]const u8 = null,
 /// custom integrations while matching the current struct shape.
 pub fn init(
     io: std.Io,
-    req_arena: std.mem.Allocator,
+    req_arena: Allocator,
     raw_req: *Request,
 ) Self {
     return .{

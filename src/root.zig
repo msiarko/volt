@@ -15,14 +15,6 @@
 
 const std = @import("std");
 
-const json = @import("extractors/json.zig");
-const query = @import("extractors/query.zig");
-const typed_query = @import("extractors/typed_query.zig");
-const header = @import("extractors/header.zig");
-const route_param = @import("extractors/route_param.zig");
-const form = @import("extractors/form.zig");
-const router = @import("router.zig");
-
 /// HTTP server runtime that accepts connections and dispatches requests to a Router.
 ///
 /// Example:
@@ -102,7 +94,7 @@ pub const extract = struct {
     ///     return Response.ok(ctx.req_arena, null, null);
     /// }
     /// ```
-    pub const Json = json.Json;
+    pub const Json = @import("extract/json.zig").Json;
 
     /// Creates a `Query` extractor type for a single query parameter.
     ///
@@ -129,7 +121,7 @@ pub const extract = struct {
     ///     return Response.ok(ctx.req_arena, null, null);
     /// }
     /// ```
-    pub const Query = query.Query;
+    pub const Query = @import("extract/query.zig").Query;
 
     /// Creates a `TypedQuery` extractor type.
     ///
@@ -163,7 +155,7 @@ pub const extract = struct {
     ///     return Response.ok(ctx.req_arena, null, null);
     /// }
     /// ```
-    pub const TypedQuery = typed_query.TypedQuery;
+    pub const TypedQuery = @import("extract/typed_query.zig").TypedQuery;
 
     /// Creates a `WebSocket` extractor.
     ///
@@ -184,7 +176,7 @@ pub const extract = struct {
     ///     return Response.empty;
     /// }
     /// ```
-    pub const WebSocket = @import("extractors/WebSocket.zig");
+    pub const WebSocket = @import("extract/websocket.zig");
 
     /// Creates a Header extractor type for a specific HTTP header name.
     ///
@@ -207,7 +199,7 @@ pub const extract = struct {
     ///     // Use token...
     /// }
     /// ```
-    pub const Header = header.Header;
+    pub const Header = @import("extract/header.zig").Header;
 
     /// Creates a 'RouteParam' extractor type
     ///
@@ -223,7 +215,7 @@ pub const extract = struct {
     ///    }
     /// }
     /// ```
-    pub const RouteParam = route_param.RouteParam;
+    pub const RouteParam = @import("extract/route_param.zig").RouteParam;
 
     /// Creates a `Form` extractor type
     ///
@@ -251,7 +243,7 @@ pub const extract = struct {
     ///     return Response.ok(ctx.req_arena, null, null);
     /// }
     /// ```
-    pub const Form = form.Form;
+    pub const Form = @import("extract/form.zig").Form;
 };
 
 /// Creates a generic HTTP router type parameterized by application state.
@@ -282,7 +274,7 @@ pub const extract = struct {
 ///     return Response.ok(ctx.req_arena, null, null);
 /// }
 /// ```
-pub const Router = router.Router;
+pub const Router = @import("router.zig").Router;
 
 /// HTTP response type used by handlers.
 ///
@@ -303,14 +295,17 @@ pub const Router = router.Router;
 pub const Response = @import("Response.zig");
 
 test {
-    const testing = std.testing;
-    _ = testing.refAllDecls(json);
-    _ = testing.refAllDecls(query);
-    _ = testing.refAllDecls(typed_query);
-    _ = testing.refAllDecls(header);
-    _ = testing.refAllDecls(route_param);
-    _ = testing.refAllDecls(form);
-    _ = testing.refAllDecls(router);
-    _ = testing.refAllDecls(Response);
-    _ = testing.refAllDecls(Server);
+    const refAllDecls = @import("std").testing.refAllDecls;
+    _ = refAllDecls(Context);
+    _ = refAllDecls(Response);
+    _ = refAllDecls(Server);
+    _ = refAllDecls(@import("router.zig"));
+    _ = refAllDecls(@import("extract/json.zig"));
+    _ = refAllDecls(@import("extract/query.zig"));
+    _ = refAllDecls(@import("extract/typed_query.zig"));
+    _ = refAllDecls(@import("extract/header.zig"));
+    _ = refAllDecls(@import("extract/route_param.zig"));
+    _ = refAllDecls(@import("extract/form.zig"));
+    _ = refAllDecls(@import("extract/WebSocket.zig"));
+    _ = refAllDecls(@import("extract/utils.zig"));
 }

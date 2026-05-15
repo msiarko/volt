@@ -1,7 +1,7 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const HttpStatus = std.http.Status;
 const HttpRequest = std.http.Server.Request;
-const WebSocket = @import("extractors/WebSocket.zig");
 const HttpHeader = std.http.Header;
 
 const Attributes = struct {
@@ -14,8 +14,8 @@ const Self = @This();
 
 attributes: ?Attributes,
 
-fn into_http_response(
-    arena: std.mem.Allocator,
+fn intoHttpResponse(
+    arena: Allocator,
     status: HttpStatus,
     content: []const u8,
     content_type: []const u8,
@@ -46,8 +46,8 @@ fn into_http_response(
 /// - `headers`: Optional additional headers
 ///
 /// Returns: HTTP 500 response
-pub fn internal_server_error(
-    arena: std.mem.Allocator,
+pub fn internalServerError(
+    arena: Allocator,
     content: []const u8,
     headers: ?[]const HttpHeader,
 ) !Self {
@@ -69,12 +69,12 @@ pub fn internal_server_error(
 /// return Response.json(arena, .ok, "{\"users\": []}", null);
 /// ```
 pub fn json(
-    arena: std.mem.Allocator,
+    arena: Allocator,
     status: HttpStatus,
     content: []const u8,
     headers: ?[]const HttpHeader,
 ) !Self {
-    return into_http_response(arena, status, content, "application/json", headers);
+    return intoHttpResponse(arena, status, content, "application/json", headers);
 }
 
 /// Creates a plain text response with appropriate Content-Type header.
@@ -92,12 +92,12 @@ pub fn json(
 /// return Response.text(arena, .ok, "Hello, World!", null);
 /// ```
 pub fn text(
-    arena: std.mem.Allocator,
+    arena: Allocator,
     status: HttpStatus,
     content: []const u8,
     extra_headers: ?[]const HttpHeader,
 ) !Self {
-    return into_http_response(arena, status, content, "text/plain", extra_headers);
+    return intoHttpResponse(arena, status, content, "text/plain", extra_headers);
 }
 
 /// Creates a 200 OK response with optional content.
@@ -113,12 +113,12 @@ pub fn text(
 /// ```zig
 /// return Response.ok(arena, "Operation successful", null);
 /// ```
-pub fn ok(arena: std.mem.Allocator, content: ?[]const u8, headers: ?[]const HttpHeader) !Self {
+pub fn ok(arena: Allocator, content: ?[]const u8, headers: ?[]const HttpHeader) !Self {
     if (content) |c| {
         return text(arena, .ok, c, headers);
     }
 
-    return into_http_response(arena, .ok, &.{}, &.{}, headers);
+    return intoHttpResponse(arena, .ok, &.{}, &.{}, headers);
 }
 
 /// Creates an HTML response with appropriate Content-Type header.
@@ -136,12 +136,12 @@ pub fn ok(arena: std.mem.Allocator, content: ?[]const u8, headers: ?[]const Http
 /// return Response.html(arena, .ok, "<h1>Welcome</h1>", null);
 /// ```
 pub fn html(
-    arena: std.mem.Allocator,
+    arena: Allocator,
     status: HttpStatus,
     content: []const u8,
     headers: ?[]const HttpHeader,
 ) !Self {
-    return into_http_response(arena, status, content, "text/html", headers);
+    return intoHttpResponse(arena, status, content, "text/html", headers);
 }
 
 pub const empty: Self = .{ .attributes = null };

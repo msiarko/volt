@@ -2,18 +2,19 @@ const std = @import("std");
 const Request = std.http.Server.Request;
 const Allocator = std.mem.Allocator;
 const HttpRequest = std.http.Server.Request;
-const Response = @import("Response.zig");
-const WebSocket = @import("extractors/WebSocket.zig");
 const Context = @import("Context.zig");
+const Response = @import("Response.zig");
 const ArgsTuple = std.meta.ArgsTuple;
 const FnParam = std.builtin.Type.Fn.Param;
+const log = std.log;
 
-const JsonResolver = @import("extractors/json.zig").Resolver;
-const QueryResolver = @import("extractors/query.zig").Resolver;
-const TypedQueryResolver = @import("extractors/typed_query.zig").Resolver;
-const HeaderResolver = @import("extractors/header.zig").Resolver;
-const RouteParamResolver = @import("extractors/route_param.zig").Resolver;
-const FormResolver = @import("extractors/form.zig").Resolver;
+const WebSocket = @import("extract/WebSocket.zig");
+const JsonResolver = @import("extract/json.zig").Resolver;
+const QueryResolver = @import("extract/query.zig").Resolver;
+const TypedQueryResolver = @import("extract/typed_query.zig").Resolver;
+const HeaderResolver = @import("extract/header.zig").Resolver;
+const RouteParamResolver = @import("extract/route_param.zig").Resolver;
+const FormResolver = @import("extract/form.zig").Resolver;
 
 const extractor_resolvers = .{
     JsonResolver,
@@ -56,8 +57,7 @@ pub fn Router(comptime State: type) type {
             ptr: *const anyopaque,
             vtable: VTable,
 
-            pub fn init(comptime FnPtr: type, h: *const anyopaque) @This() {
-                const Fn = std.meta.Child(FnPtr);
+            pub fn init(comptime Fn: type, h: *const anyopaque) @This() {
                 const impl = struct {
                     fn exec(ptr: *const anyopaque, ctx: Context, state: State) !Response {
                         var args: ArgsTuple(Fn) = undefined;
@@ -83,7 +83,7 @@ pub fn Router(comptime State: type) type {
                             }
                         }
 
-                        const fun: FnPtr = @ptrCast(@alignCast(ptr));
+                        const fun: *const Fn = @ptrCast(@alignCast(ptr));
                         return @call(.auto, fun, args);
                     }
                 };
@@ -231,7 +231,7 @@ pub fn Router(comptime State: type) type {
             while (true) {
                 var req = http_server.receiveHead() catch |err| {
                     if (err == error.HttpConnectionClosing) break;
-                    std.log.err("Failed to receive head: {}", .{err});
+                    log.err("Failed to receive head: {}", .{err});
                     break;
                 };
 
@@ -477,23 +477,18 @@ pub fn Router(comptime State: type) type {
         }
 
         fn makeHandler(handler: anytype) Handler {
-            const FnPtr = @TypeOf(handler);
-            const func_ptr_info = @typeInfo(FnPtr);
-            if (func_ptr_info != .pointer or !func_ptr_info.pointer.is_const) {
-                @compileError("handler must be a const pointer type");
+            const Fn = @TypeOf(handler);
+            const func = @typeInfo(Fn);
+            if (func != .@"fn") {
+                @compileError("handler must be a function");
             }
 
-            const func_type_info = @typeInfo(std.meta.Child(FnPtr));
-            if (func_type_info != .@"fn") {
-                @compileError("handler must be a const pointer type to a function");
-            }
-
-            const ret_type_info = @typeInfo(func_type_info.@"fn".return_type.?);
-            if (ret_type_info != .error_union or ret_type_info.error_union.payload != Response) {
+            const ret = @typeInfo(func.@"fn".return_type.?);
+            if (ret != .error_union or ret.error_union.payload != Response) {
                 @compileError("handler must return !Response");
             }
 
-            return .init(FnPtr, @ptrCast(handler));
+            return .init(Fn, @ptrCast(&handler));
         }
     };
 }
@@ -509,9 +504,6 @@ fn isMemberOfErrorSet(comptime T: type, err: anyerror) bool {
 
     return false;
 }
-
-const TestRouter = Router(void);
-const RouteParam = @import("extractors/route_param.zig").RouteParam;
 
 test "isMemberOfErrorSet returns true for member" {
     const AppError = error{ NotFound, InvalidPayload };
@@ -530,7 +522,7 @@ test "isMemberOfErrorSet works with another error set" {
 }
 
 test "handleRequest returns 404 for unknown route" {
-    var router: TestRouter = .init(std.testing.allocator, {});
+    var router: Router(void) = .init(std.testing.allocator, {});
     defer router.deinit(std.testing.allocator);
 
     const req_bytes = "GET /missing HTTP/1.1\r\n\r\n";
@@ -548,6 +540,7 @@ test "handleRequest returns 404 for unknown route" {
 }
 
 test "handleRequest returns 405 for method mismatch" {
+    const TestRouter = Router(void);
     var router: TestRouter = .init(std.testing.allocator, {});
     defer router.deinit(std.testing.allocator);
 
@@ -575,7 +568,8 @@ test "handleRequest returns 405 for method mismatch" {
 }
 
 test "handleRequest returns 405 with Allow header for parametric route mismatch" {
-    var router: TestRouter = .init(std.testing.allocator, {});
+    const RouteParam = @import("extract/route_param.zig").RouteParam;
+    var router: Router(void) = .init(std.testing.allocator, {});
     defer router.deinit(std.testing.allocator);
 
     const handlers = struct {
@@ -603,7 +597,8 @@ test "handleRequest returns 405 with Allow header for parametric route mismatch"
 }
 
 test "handleRequest falls back to parametric method when exact path lacks method" {
-    var router: TestRouter = .init(std.testing.allocator, {});
+    const RouteParam = @import("extract/route_param.zig").RouteParam;
+    var router: Router(void) = .init(std.testing.allocator, {});
     defer router.deinit(std.testing.allocator);
 
     const handlers = struct {
@@ -636,7 +631,8 @@ test "handleRequest falls back to parametric method when exact path lacks method
 }
 
 test "handleRequest returns combined Allow header for overlapping path matches" {
-    var router: TestRouter = .init(std.testing.allocator, {});
+    const RouteParam = @import("extract/route_param.zig").RouteParam;
+    var router: Router(void) = .init(std.testing.allocator, {});
     defer router.deinit(std.testing.allocator);
 
     const handlers = struct {
@@ -670,7 +666,7 @@ test "handleRequest returns combined Allow header for overlapping path matches" 
 }
 
 test "handleRequest ignores websocket extractor errors" {
-    var router: TestRouter = .init(std.testing.allocator, {});
+    var router: Router(void) = .init(std.testing.allocator, {});
     defer router.deinit(std.testing.allocator);
 
     const handlers = struct {
@@ -699,7 +695,8 @@ test "handleRequest ignores websocket extractor errors" {
 }
 
 test "findHandler prefers exact route over parametric overlap" {
-    var router: TestRouter = .init(std.testing.allocator, {});
+    const RouteParam = @import("extract/route_param.zig").RouteParam;
+    var router: Router(void) = .init(std.testing.allocator, {});
     defer router.deinit(std.testing.allocator);
 
     const handlers = struct {
@@ -731,7 +728,8 @@ test "findHandler prefers exact route over parametric overlap" {
 }
 
 test "handleRequest applies parametric precedence by literal segments" {
-    var router: TestRouter = .init(std.testing.allocator, {});
+    const RouteParam = @import("extract/route_param.zig").RouteParam;
+    var router: Router(void) = .init(std.testing.allocator, {});
     defer router.deinit(std.testing.allocator);
 
     const handlers = struct {
@@ -765,7 +763,8 @@ test "handleRequest applies parametric precedence by literal segments" {
 }
 
 test "router rejects duplicate placeholder names in same route" {
-    var router: TestRouter = .init(std.testing.allocator, {});
+    const RouteParam = @import("extract/route_param.zig").RouteParam;
+    var router: Router(void) = .init(std.testing.allocator, {});
     defer router.deinit(std.testing.allocator);
 
     const handlers = struct {
@@ -782,7 +781,7 @@ test "router rejects duplicate placeholder names in same route" {
 }
 
 test "literal colon segment is treated as exact route" {
-    var router: TestRouter = .init(std.testing.allocator, {});
+    var router: Router(void) = .init(std.testing.allocator, {});
     defer router.deinit(std.testing.allocator);
 
     const handlers = struct {
@@ -807,7 +806,7 @@ test "literal colon segment is treated as exact route" {
 }
 
 test "router duplicates route path keys on registration" {
-    var router: TestRouter = .init(std.testing.allocator, {});
+    var router: Router(void) = .init(std.testing.allocator, {});
     defer router.deinit(std.testing.allocator);
 
     const handlers = struct {
