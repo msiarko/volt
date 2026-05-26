@@ -550,7 +550,7 @@ test "handleRequest returns 405 for method mismatch" {
         }
     };
 
-    try router.post(std.testing.allocator, "/users", &handlers.postOnly);
+    try router.post(std.testing.allocator, "/users", handlers.postOnly);
 
     const req_bytes = "GET /users HTTP/1.1\r\n\r\n";
     var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
@@ -579,7 +579,7 @@ test "handleRequest returns 405 with Allow header for parametric route mismatch"
         }
     };
 
-    try router.put(std.testing.allocator, "/users/:id", &handlers.putOnly);
+    try router.put(std.testing.allocator, "/users/:id", handlers.putOnly);
 
     const req_bytes = "GET /users/42 HTTP/1.1\r\n\r\n";
     var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
@@ -612,8 +612,8 @@ test "handleRequest falls back to parametric method when exact path lacks method
         }
     };
 
-    try router.post(std.testing.allocator, "/users/me", &handlers.exactPost);
-    try router.get(std.testing.allocator, "/users/:id", &handlers.paramGet);
+    try router.post(std.testing.allocator, "/users/me", handlers.exactPost);
+    try router.get(std.testing.allocator, "/users/:id", handlers.paramGet);
 
     const req_bytes = "GET /users/me HTTP/1.1\r\n\r\n";
     var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
@@ -646,8 +646,8 @@ test "handleRequest returns combined Allow header for overlapping path matches" 
         }
     };
 
-    try router.post(std.testing.allocator, "/users/me", &handlers.exactPost);
-    try router.put(std.testing.allocator, "/users/:id", &handlers.paramPut);
+    try router.post(std.testing.allocator, "/users/me", handlers.exactPost);
+    try router.put(std.testing.allocator, "/users/:id", handlers.paramPut);
 
     const req_bytes = "GET /users/me HTTP/1.1\r\n\r\n";
     var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
@@ -680,7 +680,7 @@ test "handleRequest ignores websocket extractor errors" {
         }
     };
 
-    try router.get(std.testing.allocator, "/ws", &handlers.websocketRoute);
+    try router.get(std.testing.allocator, "/ws", handlers.websocketRoute);
 
     const req_bytes = "GET /ws HTTP/1.1\r\n\r\n";
     var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
@@ -710,8 +710,8 @@ test "findHandler prefers exact route over parametric overlap" {
         }
     };
 
-    try router.get(std.testing.allocator, "/users/:id", &handlers.param);
-    try router.get(std.testing.allocator, "/users/me", &handlers.exact);
+    try router.get(std.testing.allocator, "/users/:id", handlers.param);
+    try router.get(std.testing.allocator, "/users/me", handlers.exact);
 
     const req_bytes = "GET /users/me HTTP/1.1\r\n\r\n";
     var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
@@ -745,8 +745,8 @@ test "handleRequest applies parametric precedence by literal segments" {
         }
     };
 
-    try router.get(std.testing.allocator, "/:entity/:id", &handlers.generic);
-    try router.get(std.testing.allocator, "/users/:id", &handlers.users);
+    try router.get(std.testing.allocator, "/:entity/:id", handlers.generic);
+    try router.get(std.testing.allocator, "/users/:id", handlers.users);
 
     const req_bytes = "GET /users/42 HTTP/1.1\r\n\r\n";
     var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
@@ -776,7 +776,7 @@ test "router rejects duplicate placeholder names in same route" {
 
     try std.testing.expectError(
         error.DuplicateRouteParamName,
-        router.get(std.testing.allocator, "/users/:id/orders/:id", &handlers.duplicate),
+        router.get(std.testing.allocator, "/users/:id/orders/:id", handlers.duplicate),
     );
 }
 
@@ -790,7 +790,7 @@ test "literal colon segment is treated as exact route" {
         }
     };
 
-    try router.get(std.testing.allocator, "/time/10:30", &handlers.literal);
+    try router.get(std.testing.allocator, "/time/10:30", handlers.literal);
 
     const req_bytes = "GET /time/10:30 HTTP/1.1\r\n\r\n";
     var stream_buf_reader = std.Io.Reader.fixed(req_bytes);
@@ -816,7 +816,7 @@ test "router duplicates route path keys on registration" {
     };
 
     var dynamic_path = [_]u8{ '/', 'd', 'y', 'n' };
-    try router.get(std.testing.allocator, dynamic_path[0..], &handlers.owned);
+    try router.get(std.testing.allocator, dynamic_path[0..], handlers.owned);
     dynamic_path[1] = 'x';
 
     const req_bytes = "GET /dyn HTTP/1.1\r\n\r\n";
