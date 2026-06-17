@@ -12,13 +12,14 @@ const EXTRACTOR_ID: []const u8 = "VOLT_TYPED_QUERY_EXTRACTOR";
 const TypedQueryError = AllocatorError || utils.ParseError;
 
 fn assert(comptime T: type) void {
-    if (@typeInfo(T) != .@"struct") {
+    const type_info = @typeInfo(T);
+    if (type_info != .@"struct") {
         @compileError("Type is not a struct");
     }
 
-    inline for (std.meta.fields(T)) |field| {
-        if (@typeInfo(field.type) != .optional) {
-            @compileError(field.name ++ " field must be of type optional");
+    inline for (type_info.@"struct".field_types, type_info.@"struct".field_names) |field_type, field_name| {
+        if (@typeInfo(field_type) != .optional) {
+            @compileError(field_name ++ " field must be of type optional");
         }
     }
 }
@@ -28,20 +29,22 @@ fn extract(comptime T: type, arena: Allocator, req: *Request) TypedQueryError!?*
     var typed_query = try arena.create(T);
     errdefer arena.destroy(typed_query);
 
-    const fields = std.meta.fields(T);
-    inline for (fields) |field| {
-        @field(typed_query, field.name) = null;
+    const type_info = @typeInfo(T);
+    const field_names = type_info.@"struct".field_names;
+    const field_types = type_info.@"struct".field_types;
+    inline for (field_names) |field_name| {
+        @field(typed_query, field_name) = null;
     }
 
     while (query_it.next()) |entry| {
         const value = entry.value orelse continue;
         const key = try utils.decodeUrl(arena, entry.key);
 
-        inline for (fields) |field| {
-            if (std.ascii.eqlIgnoreCase(key, field.name)) {
+        inline for (field_names, field_types) |field_name, field_type| {
+            if (std.ascii.eqlIgnoreCase(key, field_name)) {
                 const decoded_value = try utils.decodeUrl(arena, value);
-                const field_type = @typeInfo(field.type).optional.child;
-                @field(typed_query, field.name) = try utils.parse(field_type, decoded_value);
+                const child_field_type = @typeInfo(field_type).optional.child;
+                @field(typed_query, field_name) = try utils.parse(child_field_type, decoded_value);
             }
         }
     }

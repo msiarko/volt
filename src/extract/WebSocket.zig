@@ -2,7 +2,6 @@ const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const Request = std.http.Server.Request;
-const StructField = std.builtin.Type.StructField;
 const WebSocket = std.http.Server.WebSocket;
 const WriterError = std.Io.Writer.Error;
 const ExpectedContinueError = std.http.Server.Request.ExpectContinueError;
@@ -37,9 +36,9 @@ pub fn onConnected(self: *const Self, handler: anytype, args: anytype) !void {
         @compileError("handler must be a function");
     }
 
-    const handler_params_len = handler_type_info.@"fn".params.len;
-    const args_fields = args_type_info.@"struct".fields;
-    const params = comptime getParamsTypes(handler_params_len, args_fields);
+    const handler_params_len = handler_type_info.@"fn".param_attrs.len;
+    const field_types = args_type_info.@"struct".field_types;
+    const params = comptime getParamsTypes(handler_params_len, field_types);
     var new_args: @Tuple(params) = undefined;
     inline for (0..params.len) |i| {
         if (i == params.len - 1) {
@@ -68,13 +67,13 @@ fn extract(req: *Request) WebSocketError!WebSocket {
     };
 }
 
-fn getParamsTypes(comptime params_len: usize, comptime args_fields: []const StructField) []const type {
+fn getParamsTypes(comptime params_len: usize, comptime param_types: []const type) []const type {
     comptime var params: [params_len]type = undefined;
     inline for (0..params_len) |i| {
         if (i == params_len - 1) {
             params[i] = *WebSocket;
-        } else if (i < args_fields.len) {
-            params[i] = args_fields[i].type;
+        } else if (i < param_types.len) {
+            params[i] = param_types[i];
         }
     }
 

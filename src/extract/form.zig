@@ -30,6 +30,7 @@ fn extractMultipartFormData(
     const out: *T = try arena.create(T);
     errdefer arena.destroy(out);
 
+    const type_info = @typeInfo(T);
     var body_it = std.mem.splitSequence(u8, content, delimiter);
     while (body_it.next()) |part| {
         const part_trimmed = std.mem.trim(u8, part, "\r\n");
@@ -51,9 +52,9 @@ fn extractMultipartFormData(
         };
 
         const value = it.next() orelse return FormError.MalformedMultipartBody;
-        inline for (std.meta.fields(T)) |field| {
-            if (std.mem.eql(u8, field.name, key)) {
-                @field(out, field.name) = try utils.parse(field.type, value);
+        inline for (type_info.@"struct".field_names, type_info.@"struct".field_types) |field_name, field_type| {
+            if (std.mem.eql(u8, field_name, key)) {
+                @field(out, field_name) = try utils.parse(field_type, value);
             }
         }
     }
@@ -69,6 +70,7 @@ fn extractUrlEncodedFormData(
     const out: *T = try arena.create(T);
     errdefer arena.destroy(out);
 
+    const type_info = @typeInfo(T);
     var pairs_it = std.mem.splitScalar(u8, content, '&');
     while (pairs_it.next()) |pair| {
         var kv_it = std.mem.splitScalar(u8, pair, '=');
@@ -77,9 +79,9 @@ fn extractUrlEncodedFormData(
         const key_decoded = try utils.decodeUrl(arena, key);
         const value_decoded = try utils.decodeUrl(arena, value);
 
-        inline for (std.meta.fields(T)) |field| {
-            if (std.mem.eql(u8, field.name, key_decoded)) {
-                @field(out, field.name) = try utils.parse(field.type, value_decoded);
+        inline for (type_info.@"struct".field_names, type_info.@"struct".field_types) |field_name, field_type| {
+            if (std.mem.eql(u8, field_name, key_decoded)) {
+                @field(out, field_name) = try utils.parse(field_type, value_decoded);
             }
         }
     }

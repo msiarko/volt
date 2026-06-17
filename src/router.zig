@@ -61,9 +61,10 @@ pub fn Router(comptime State: type) type {
                 const impl = struct {
                     fn exec(ptr: *const anyopaque, ctx: Context, state: State) !Response {
                         var args: ArgsTuple(Fn) = undefined;
-                        const args_fields = comptime std.meta.fields(ArgsTuple(Fn));
-                        inline for (args_fields, 0..args_fields.len) |field, i| {
-                            switch (field.type) {
+                        const type_info = @typeInfo(ArgsTuple(Fn));
+                        const field_types = type_info.@"struct".field_types;
+                        inline for (field_types, 0..field_types.len) |field_type, i| {
+                            switch (field_type) {
                                 Context => args[i] = ctx,
                                 State => args[i] = state,
                                 WebSocket => args[i] = .{ .result = WebSocket.init(ctx) },
@@ -77,7 +78,7 @@ pub fn Router(comptime State: type) type {
                                     }
 
                                     if (!resolved) {
-                                        @compileError("unable to resolve parameter of type " ++ @typeName(field.type));
+                                        @compileError("unable to resolve parameter of type " ++ @typeName(field_type));
                                     }
                                 },
                             }
@@ -355,8 +356,8 @@ pub fn Router(comptime State: type) type {
         fn buildAllowHeaderValue(buf: *[128]u8, methods: std.EnumSet(std.http.Method)) []u8 {
             var writer = std.Io.Writer.fixed(buf);
             var first = true;
-            inline for (std.meta.fields(std.http.Method)) |field| {
-                const method = @field(std.http.Method, field.name);
+            inline for (@typeInfo(std.http.Method).@"enum".field_names) |field_name| {
+                const method = @field(std.http.Method, field_name);
                 if (methods.contains(method)) {
                     if (!first) {
                         writer.writeAll(", ") catch unreachable;
@@ -497,9 +498,10 @@ fn isMemberOfErrorSet(comptime T: type, err: anyerror) bool {
     const info = @typeInfo(T);
     if (info != .error_set) @compileError("T should be an error set");
 
-    const error_set = info.error_set orelse return false;
-    inline for (error_set) |err_field| {
-        if (err == @field(T, err_field.name)) return true;
+    if (info.error_set.error_names) |error_names| {
+        inline for (error_names) |err_name| {
+            if (err == @field(T, err_name)) return true;
+        }
     }
 
     return false;
