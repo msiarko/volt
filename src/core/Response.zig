@@ -81,6 +81,22 @@ pub fn internalServerError(
     return text(arena, .internal_server_error, content, headers);
 }
 
+/// Creates a 400 Bad Request response.
+///
+/// Parameters:
+/// - `arena`: Allocator for response construction
+/// - `content`: Error message or content
+/// - `headers`: Optional additional headers
+///
+/// Returns: HTTP 400 response
+pub fn badRequest(
+    arena: Allocator,
+    content: []const u8,
+    headers: ?[]const HttpHeader,
+) !Self {
+    return text(arena, .bad_request, content, headers);
+}
+
 /// Creates a JSON response with appropriate Content-Type header.
 ///
 /// Parameters:

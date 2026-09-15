@@ -17,18 +17,13 @@ pub const WebSocketError = WebSocketUpgradeError || WriterError || ExpectedConti
 
 const Self = @This();
 
-result: WebSocketError!WebSocket,
+socket: WebSocket,
 
-pub fn fromContext(ctx: Context) Self {
-    return .{ .result = extract(ctx.raw_req) };
-}
-
-pub fn init(ctx: Context) Self {
-    return fromContext(ctx);
+pub fn init(ctx: Context) WebSocketError!Self {
+    return .{ .socket = try extract(ctx.raw_req) };
 }
 
 pub fn onConnected(self: *const Self, handler: anytype, args: anytype) !void {
-    var socket = try self.result;
     const args_type_info = @typeInfo(@TypeOf(args));
     if (args_type_info != .@"struct" and !args_type_info.@"struct".is_tuple) {
         @compileError("args must be a tuple");
@@ -45,7 +40,7 @@ pub fn onConnected(self: *const Self, handler: anytype, args: anytype) !void {
     var new_args: @Tuple(params) = undefined;
     inline for (0..params.len) |i| {
         if (i == params.len - 1) {
-            new_args[i] = &socket;
+            new_args[i] = &self.socket;
         } else {
             new_args[i] = args[i];
         }
@@ -103,17 +98,6 @@ test "init returns NotWebSocketUpgrade for regular HTTP request" {
         .req_arena = testing.allocator,
         .raw_req = &http_req,
     };
-    const ws_result = Self.fromContext(test_ctx);
-    try testing.expectEqual(WebSocketError.NotWebSocketUpgrade, ws_result.result);
-}
-
-test "onConnected returns stored extractor error" {
-    const testing = std.testing;
-
-    const ws: Self = .{ .result = WebSocketError.NotWebSocketUpgrade };
-    const handler = struct {
-        fn f(_: *std.http.Server.WebSocket) !void {}
-    }.f;
-
-    try testing.expectError(WebSocketError.NotWebSocketUpgrade, ws.onConnected(handler, .{}));
+    const ws_result = Self.init(test_ctx);
+    try testing.expectEqual(WebSocketError.NotWebSocketUpgrade, ws_result);
 }

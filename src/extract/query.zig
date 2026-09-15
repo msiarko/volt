@@ -25,18 +25,15 @@ fn extract(comptime name: []const u8, arena: Allocator, req: *Request) Allocator
 }
 
 pub fn Query(comptime name: []const u8) type {
-    assert(name.len > 0);
+    comptime assert(name.len > 0);
     return struct {
         const Self = @This();
 
-        result: AllocatorError!?[]const u8,
+        name: []const u8 = name,
+        value: ?[]const u8,
 
-        pub fn fromContext(ctx: Context) Self {
-            return .{ .result = extract(name, ctx.req_arena, ctx.raw_req) };
-        }
-
-        pub fn init(ctx: Context) Self {
-            return fromContext(ctx);
+        pub fn init(ctx: Context) AllocatorError!Self {
+            return .{ .value = try extract(name, ctx.req_arena, ctx.raw_req) };
         }
     };
 }
@@ -66,14 +63,15 @@ test "init returns value when query param is present" {
         .raw_req = &http_req,
     };
 
-    const query = Query("name").fromContext(test_ctx);
-    const result = query.result catch {
+    const result = Query("name").init(test_ctx);
+    const query = result catch {
         try testing.expect(false);
         return;
     };
 
-    try testing.expect(result != null);
-    try testing.expectEqualStrings("zig", result.?);
+    try testing.expectEqualStrings("name", query.name);
+    try testing.expect(query.value != null);
+    try testing.expectEqualStrings("zig", query.value.?);
 }
 
 test "init returns null when parameter is absent" {
@@ -101,13 +99,13 @@ test "init returns null when parameter is absent" {
         .raw_req = &http_req,
     };
 
-    const res = Query("name").fromContext(test_ctx);
-    const result = res.result catch {
+    const result = Query("name").init(test_ctx);
+    const query = result catch {
         try testing.expect(false);
         return;
     };
 
-    try testing.expectEqual(null, result);
+    try testing.expectEqual(null, query.value);
 }
 
 test "init returns null for empty parameter value" {
@@ -135,13 +133,13 @@ test "init returns null for empty parameter value" {
         .raw_req = &http_req,
     };
 
-    const res = Query("name").fromContext(test_ctx);
-    const result = res.result catch {
+    const result = Query("name").init(test_ctx);
+    const query = result catch {
         try testing.expect(false);
         return;
     };
     // Per extractor behavior an explicit empty value yields `null`
-    try testing.expectEqual(null, result);
+    try testing.expectEqual(null, query.value);
 }
 
 test "init returns the source value when percent decoding is not needed" {
@@ -169,12 +167,12 @@ test "init returns the source value when percent decoding is not needed" {
         .raw_req = &http_req,
     };
 
-    const query = Query("name").fromContext(test_ctx);
-    const result = query.result catch {
+    const result = Query("name").init(test_ctx);
+    const query = result catch {
         try testing.expect(false);
         return;
     };
-    try testing.expectEqualStrings("bad%2", result.?);
+    try testing.expectEqualStrings("bad%2", query.value.?);
 }
 
 test "init returns null when request has no query string" {
@@ -202,12 +200,12 @@ test "init returns null when request has no query string" {
         .raw_req = &http_req,
     };
 
-    const res = Query("name").fromContext(test_ctx);
-    const result = res.result catch {
+    const result = Query("name").init(test_ctx);
+    const query = result catch {
         try testing.expect(false);
         return;
     };
-    try testing.expectEqual(null, result);
+    try testing.expectEqual(null, query.value);
 }
 
 test "init matches decoded key name case-insensitively" {
@@ -235,11 +233,11 @@ test "init matches decoded key name case-insensitively" {
         .raw_req = &http_req,
     };
 
-    const res = Query("FIRST NAME").fromContext(test_ctx);
-    const result = res.result catch {
+    const result = Query("FIRST NAME").init(test_ctx);
+    const query = result catch {
         try testing.expect(false);
         return;
     };
-    try testing.expect(result != null);
-    try testing.expectEqualStrings("Ana", result.?);
+    try testing.expect(query.value != null);
+    try testing.expectEqualStrings("Ana", query.value.?);
 }

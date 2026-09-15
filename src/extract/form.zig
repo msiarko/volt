@@ -2,7 +2,6 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const AllocatorError = std.mem.Allocator.Error;
 const ReadAllocError = std.Io.Reader.ReadAllocError;
-const assert = std.debug.assert;
 const Context = @import("core").Context;
 const url = @import("url.zig");
 const Request = std.http.Server.Request;
@@ -132,14 +131,10 @@ pub fn Form(comptime T: type) type {
     return struct {
         const Self = @This();
 
-        result: FormError!*T,
+        data: *T,
 
-        pub fn fromContext(ctx: Context) Self {
-            return .{ .result = extract(T, ctx.req_arena, ctx.raw_req) };
-        }
-
-        pub fn init(ctx: Context) Self {
-            return fromContext(ctx);
+        pub fn init(ctx: Context) FormError!Self {
+            return .{ .data = try extract(T, ctx.req_arena, ctx.raw_req) };
         }
     };
 }
@@ -194,15 +189,9 @@ test "init returns Form with value when content type is multipart/form-data" {
         age: u8,
     };
 
-    const form = Form(Person).fromContext(test_ctx);
-
-    const person = form.result catch {
-        try testing.expect(false);
-        return;
-    };
-
-    try testing.expectEqualStrings("Name", person.name);
-    try testing.expectEqual(30, person.age);
+    const form = try Form(Person).init(test_ctx);
+    try testing.expectEqualStrings("Name", form.data.name);
+    try testing.expectEqual(30, form.data.age);
 }
 
 test "init returns Form with value when content type is application/x-www-form-urlencoded" {
@@ -244,14 +233,9 @@ test "init returns Form with value when content type is application/x-www-form-u
         age: u8,
     };
 
-    const form = Form(Person).fromContext(test_ctx);
-    const person = form.result catch {
-        try testing.expect(false);
-        return;
-    };
-
-    try testing.expectEqualStrings("Name White", person.name);
-    try testing.expectEqual(30, person.age);
+    const form = try Form(Person).init(test_ctx);
+    try testing.expectEqualStrings("Name White", form.data.name);
+    try testing.expectEqual(30, form.data.age);
 }
 
 test "init returns error when content type is missing" {
@@ -292,8 +276,7 @@ test "init returns error when content type is missing" {
         age: u8,
     };
 
-    const form = Form(Person).fromContext(test_ctx);
-    try testing.expectError(error.MissingContentType, form.result);
+    try testing.expectError(error.MissingContentType, Form(Person).init(test_ctx));
 }
 
 test "init returns error when content length is missing" {
@@ -334,8 +317,7 @@ test "init returns error when content length is missing" {
         age: u8,
     };
 
-    const form = Form(Person).fromContext(test_ctx);
-    try testing.expectError(error.MissingContentLength, form.result);
+    try testing.expectError(error.MissingContentLength, Form(Person).init(test_ctx));
 }
 
 test "init returns error when body is empty" {
@@ -377,6 +359,5 @@ test "init returns error when body is empty" {
         age: u8,
     };
 
-    const form = Form(Person).fromContext(test_ctx);
-    try testing.expectError(error.EmptyBody, form.result);
+    try testing.expectError(error.EmptyBody, Form(Person).init(test_ctx));
 }

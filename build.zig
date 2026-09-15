@@ -4,9 +4,9 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const extract_enabled = b.option(bool, "extract_enabled", "Enable built-in extractors") orelse false;
-    const testing_enabled = b.option(bool, "testing_enabled", "Enable built-in testing tools") orelse false;
-    const middleware_enabled = b.option(bool, "middleware_enabled", "Enable built-in middleware system") orelse false;
+    const extract_enabled = b.option(bool, "extract", "Enable built-in extractors") orelse false;
+    const testing_enabled = b.option(bool, "testing", "Enable built-in testing tools") orelse false;
+    const middleware_enabled = b.option(bool, "middleware", "Enable built-in middleware system") orelse false;
 
     const options = b.addOptions();
     options.addOption(bool, "extract_enabled", extract_enabled);

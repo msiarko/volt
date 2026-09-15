@@ -15,19 +15,15 @@ fn extract(comptime name: []const u8, req: *Request) Header(name) {
 }
 
 pub fn Header(comptime name: []const u8) type {
-    assert(name.len > 0);
+    comptime assert(name.len > 0);
     return struct {
         const Self = @This();
 
         name: []const u8 = name,
         value: ?[]const u8,
 
-        pub fn fromContext(ctx: Context) Self {
+        pub fn init(ctx: Context) !Self {
             return extract(name, ctx.raw_req);
-        }
-
-        pub fn init(ctx: Context) Self {
-            return fromContext(ctx);
         }
     };
 }
@@ -53,8 +49,8 @@ test "init returns Header with value when header is present" {
         .req_arena = testing_allocator,
         .raw_req = &http_req,
     };
-    const header = Header("Authorization").fromContext(test_ctx);
 
+    const header = try Header("Authorization").init(test_ctx);
     try testing.expect(header.value != null);
     try testing.expectEqualStrings("Bearer token123", header.value.?);
 }
@@ -80,8 +76,8 @@ test "init returns Header with value when multiple headers are present" {
         .req_arena = testing_allocator,
         .raw_req = &http_req,
     };
-    const header = Header("X-Request-Id").fromContext(test_ctx);
 
+    const header = try Header("X-Request-Id").init(test_ctx);
     try testing.expect(header.value != null);
     try testing.expectEqualStrings("abc-123", header.value.?);
 }
@@ -107,8 +103,8 @@ test "init returns null when header is not present" {
         .req_arena = testing_allocator,
         .raw_req = &http_req,
     };
-    const header = Header("Authorization").fromContext(test_ctx);
 
+    const header = try Header("Authorization").init(test_ctx);
     try testing.expectEqual(null, header.value);
 }
 
@@ -133,7 +129,8 @@ test "init returns null when no headers are present" {
         .req_arena = testing_allocator,
         .raw_req = &http_req,
     };
-    const header = Header("Authorization").fromContext(test_ctx);
+
+    const header = try Header("Authorization").init(test_ctx);
     try testing.expectEqual(null, header.value);
 }
 
@@ -168,8 +165,8 @@ test "init table-driven header extraction" {
             .req_arena = testing_allocator,
             .raw_req = &http_req,
         };
-        const header = Header("Authorization").fromContext(test_ctx);
 
+        const header = try Header("Authorization").init(test_ctx);
         if (case.expected) |expected| {
             try testing.expectEqualStrings(expected, header.value.?);
         } else {
@@ -200,6 +197,6 @@ test "init header name matching is case-insensitive" {
         .raw_req = &http_req,
     };
 
-    const header = Header("authorization").fromContext(test_ctx);
+    const header = try Header("authorization").init(test_ctx);
     try testing.expectEqualStrings("Bearer token123", header.value.?);
 }

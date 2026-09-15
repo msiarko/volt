@@ -65,18 +65,14 @@ fn extract(comptime T: type, arena: Allocator, req: *Request) TypedQueryError!?*
 }
 
 pub fn TypedQuery(comptime T: type) type {
-    assert(T);
+    comptime assert(T);
     return struct {
         const Self = @This();
 
-        result: TypedQueryError!?*T,
+        value: ?*T,
 
-        pub fn fromContext(ctx: Context) Self {
-            return .{ .result = extract(T, ctx.req_arena, ctx.raw_req) };
-        }
-
-        pub fn init(ctx: Context) Self {
-            return fromContext(ctx);
+        pub fn init(ctx: Context) TypedQueryError!Self {
+            return .{ .value = try extract(T, ctx.req_arena, ctx.raw_req) };
         }
     };
 }
@@ -111,12 +107,8 @@ test "TypedQuery.init returns null when no query string is present" {
         .raw_req = &http_req,
     };
 
-    const filter = TypedQuery(Filter).fromContext(test_ctx);
-    const result = filter.result catch {
-        try testing.expect(false);
-        return;
-    };
-    try testing.expectEqual(null, result);
+    const filter = try TypedQuery(Filter).init(test_ctx);
+    try testing.expectEqual(null, filter.value);
 }
 
 test "TypedQuery.init maps fields from query parameters" {
@@ -149,14 +141,10 @@ test "TypedQuery.init maps fields from query parameters" {
         .raw_req = &http_req,
     };
 
-    const typed = TypedQuery(Filter).fromContext(test_ctx);
-    const result = typed.result catch {
-        try testing.expect(false);
-        return;
-    };
-    try testing.expect(result != null);
-    try testing.expectEqualStrings("alice", result.?.name.?);
-    try testing.expectEqual(30, result.?.age.?);
+    const filter = try TypedQuery(Filter).init(test_ctx);
+    try testing.expect(filter.value != null);
+    try testing.expectEqualStrings("alice", filter.value.?.name.?);
+    try testing.expectEqual(30, filter.value.?.age.?);
 }
 
 test "TypedQuery.init returns pointer with null fields when query present but no matching fields" {
@@ -189,16 +177,12 @@ test "TypedQuery.init returns pointer with null fields when query present but no
         .raw_req = &http_req,
     };
 
-    const typed = TypedQuery(Filter).fromContext(test_ctx);
-    const result = typed.result catch {
-        try testing.expect(false);
-        return;
-    };
+    const filter = try TypedQuery(Filter).init(test_ctx);
     // When a query string exists but none of the struct fields are present,
     // the extractor returns a pointer to the struct with all fields set to null.
-    try testing.expect(result != null);
-    try testing.expectEqual(null, result.?.a);
-    try testing.expectEqual(null, result.?.b);
+    try testing.expect(filter.value != null);
+    try testing.expectEqual(null, filter.value.?.a);
+    try testing.expectEqual(null, filter.value.?.b);
 }
 
 test "TypedQuery.init field name matching is case-insensitive" {
@@ -230,13 +214,9 @@ test "TypedQuery.init field name matching is case-insensitive" {
         .raw_req = &http_req,
     };
 
-    const typed = TypedQuery(Filter).fromContext(test_ctx);
-    const result = typed.result catch {
-        try testing.expect(false);
-        return;
-    };
-    try testing.expect(result != null);
-    try testing.expectEqualStrings("Bob", result.?.name.?);
+    const filter = try TypedQuery(Filter).init(test_ctx);
+    try testing.expect(filter.value != null);
+    try testing.expectEqualStrings("Bob", filter.value.?.name.?);
 }
 
 test "TypedQuery.init keeps matched empty values as null" {
@@ -268,13 +248,9 @@ test "TypedQuery.init keeps matched empty values as null" {
         .raw_req = &http_req,
     };
 
-    const typed = TypedQuery(Filter).fromContext(test_ctx);
-    const result = typed.result catch {
-        try testing.expect(false);
-        return;
-    };
-    try testing.expect(result != null);
-    try testing.expectEqual(null, result.?.name);
+    const filter = try TypedQuery(Filter).init(test_ctx);
+    try testing.expect(filter.value != null);
+    try testing.expectEqual(null, filter.value.?.name);
 }
 
 test "TypedQuery.init returns source value when percent decoding is not needed" {
@@ -306,12 +282,8 @@ test "TypedQuery.init returns source value when percent decoding is not needed" 
         .raw_req = &http_req,
     };
 
-    const typed = TypedQuery(Filter).fromContext(test_ctx);
-    const result = typed.result catch {
-        try testing.expect(false);
-        return;
-    };
-    try testing.expectEqualStrings("bad%2", result.?.name.?);
+    const filter = try TypedQuery(Filter).init(test_ctx);
+    try testing.expectEqualStrings("bad%2", filter.value.?.name.?);
 }
 
 test "TypedQuery.init uses last value for duplicate keys" {
@@ -343,11 +315,7 @@ test "TypedQuery.init uses last value for duplicate keys" {
         .raw_req = &http_req,
     };
 
-    const typed = TypedQuery(Filter).fromContext(test_ctx);
-    const result = typed.result catch {
-        try testing.expect(false);
-        return;
-    };
-    try testing.expect(result != null);
-    try testing.expectEqualStrings("bob", result.?.name.?);
+    const filter = try TypedQuery(Filter).init(test_ctx);
+    try testing.expect(filter.value != null);
+    try testing.expectEqualStrings("bob", filter.value.?.name.?);
 }

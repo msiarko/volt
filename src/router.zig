@@ -48,7 +48,8 @@ pub fn Router(comptime Config: anytype) type {
                                 State => args[i] = state,
                                 else => |Arg| {
                                     if (comptime extractor.isExtractor(Arg)) {
-                                        args[i] = Arg.fromContext(ctx);
+                                        args[i] = Arg.init(ctx) catch |err|
+                                            return .badRequest(ctx.req_arena, @errorName(err), null);
                                     } else {
                                         @compileError("unable to resolve parameter of type " ++ @typeName(field_type));
                                     }

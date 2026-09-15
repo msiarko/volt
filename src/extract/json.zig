@@ -1,5 +1,4 @@
 const std = @import("std");
-const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const Request = std.http.Server.Request;
 const AllocatorError = std.mem.Allocator.Error;
@@ -52,14 +51,10 @@ pub fn Json(comptime T: type) type {
     return struct {
         const Self = @This();
 
-        result: JsonError!T,
+        value: T,
 
-        pub fn fromContext(ctx: Context) Self {
-            return .{ .result = extract(T, ctx.req_arena, ctx.raw_req) };
-        }
-
-        pub fn init(ctx: Context) Self {
-            return fromContext(ctx);
+        pub fn init(ctx: Context) JsonError!Self {
+            return .{ .value = try extract(T, ctx.req_arena, ctx.raw_req) };
         }
     };
 }
@@ -92,8 +87,8 @@ test "init returns extractor error when content type header is missing" {
         .raw_req = &http_req,
     };
 
-    const json = Json(Person).fromContext(test_ctx);
-    try testing.expectError(RequestValidationError.ContentTypeMissing, json.result);
+    const result = Json(Person).init(test_ctx);
+    try testing.expectError(RequestValidationError.ContentTypeMissing, result);
 }
 
 test "init returns RequestBodyMissing for methods without a body (GET)" {
@@ -126,8 +121,8 @@ test "init returns RequestBodyMissing for methods without a body (GET)" {
         .raw_req = &http_req,
     };
 
-    const json = Json(Person).fromContext(test_ctx);
-    try testing.expectError(RequestValidationError.RequestBodyMissing, json.result);
+    const result = Json(Person).init(test_ctx);
+    try testing.expectError(RequestValidationError.RequestBodyMissing, result);
 }
 
 test "init returns ContentLengthMissing when header is absent" {
@@ -160,8 +155,8 @@ test "init returns ContentLengthMissing when header is absent" {
         .raw_req = &http_req,
     };
 
-    const json = Json(Person).fromContext(test_ctx);
-    try testing.expectError(RequestValidationError.ContentLengthMissing, json.result);
+    const result = Json(Person).init(test_ctx);
+    try testing.expectError(RequestValidationError.ContentLengthMissing, result);
 }
 
 test "init returns EmptyRequestBody when content length is zero" {
@@ -194,8 +189,8 @@ test "init returns EmptyRequestBody when content length is zero" {
         .raw_req = &http_req,
     };
 
-    const json = Json(Person).fromContext(test_ctx);
-    try testing.expectError(RequestValidationError.EmptyRequestBody, json.result);
+    const result = Json(Person).init(test_ctx);
+    try testing.expectError(RequestValidationError.EmptyRequestBody, result);
 }
 
 test "init returns InvalidContentType when content type header is incorrect" {
@@ -228,8 +223,8 @@ test "init returns InvalidContentType when content type header is incorrect" {
         .raw_req = &http_req,
     };
 
-    const json = Json(Person).fromContext(test_ctx);
-    try testing.expectError(RequestValidationError.InvalidContentType, json.result);
+    const result = Json(Person).init(test_ctx);
+    try testing.expectError(RequestValidationError.InvalidContentType, result);
 }
 
 test "init successfully parses valid JSON body" {
@@ -263,14 +258,9 @@ test "init successfully parses valid JSON body" {
         .raw_req = &http_req,
     };
 
-    const json = Json(Person).fromContext(test_ctx);
-    const person = json.result catch {
-        try testing.expect(false);
-        return;
-    };
-
-    try testing.expectEqualStrings("Bob", person.name);
-    try testing.expectEqual(@as(u8, 30), person.age);
+    const person = try Json(Person).init(test_ctx);
+    try testing.expectEqualStrings("Bob", person.value.name);
+    try testing.expectEqual(@as(u8, 30), person.value.age);
 }
 
 test "init surfaces parse errors for invalid JSON" {
@@ -308,8 +298,8 @@ test "init surfaces parse errors for invalid JSON" {
         .raw_req = &http_req,
     };
 
-    const json = Json(Person).fromContext(test_ctx);
-    _ = json.result catch |err| {
+    const result = Json(Person).init(test_ctx);
+    _ = result catch |err| {
         // Ensure it's not one of the simple request validation errors
         try testing.expect(err != RequestValidationError.RequestBodyMissing);
         try testing.expect(err != RequestValidationError.ContentTypeMissing);

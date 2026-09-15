@@ -1,15 +1,19 @@
 const Context = @import("core").Context;
 
-const method_name = "fromContext";
+const method_name = "init";
 
 pub fn isExtractor(comptime T: type) bool {
-    if (@typeInfo(T) != .@"struct" and @typeInfo(T) != .@"union") return false;
+    if (@typeInfo(T) != .@"struct") return false;
     if (@hasDecl(T, method_name)) {
         const info = @typeInfo(@TypeOf(@field(T, method_name)));
+        if (info != .@"fn") return false;
+        const init = info.@"fn";
+        const Ret = init.return_type orelse return false;
+        const ret_info = @typeInfo(Ret);
         return info == .@"fn" and
-            info.@"fn".param_types.len == 1 and
-            info.@"fn".param_types[0] == Context and
-            info.@"fn".return_type.? == T;
+            init.param_types.len == 1 and
+            init.param_types[0] == Context and
+            ret_info.error_union.payload == T;
     }
 
     return false;
@@ -19,7 +23,7 @@ test "extractor returns true for a struct with a fromContext method and returns 
     const std = @import("std");
 
     const TestExtractor = struct {
-        pub fn fromContext(ctx: Context) @This() {
+        pub fn init(ctx: Context) !@This() {
             _ = ctx;
             return .{};
         }

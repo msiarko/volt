@@ -73,19 +73,20 @@ fn stripQuery(target: []const u8) []const u8 {
 /// }
 /// ```
 pub fn RouteParam(comptime name: []const u8) type {
-    assert(name.len > 0);
+    comptime assert(name.len > 0);
     return struct {
         const Self = @This();
 
         name: []const u8 = name,
-        result: AllocatorError!?[]const u8,
+        value: ?[]const u8,
 
-        pub fn fromContext(ctx: Context) Self {
-            return .{ .result = extract(name, ctx.req_arena, ctx.route_pattern, ctx.raw_req) };
-        }
-
-        pub fn init(ctx: Context) Self {
-            return fromContext(ctx);
+        pub fn init(ctx: Context) AllocatorError!Self {
+            return .{ .value = try extract(
+                name,
+                ctx.req_arena,
+                ctx.route_pattern,
+                ctx.raw_req,
+            ) };
         }
     };
 }
@@ -114,13 +115,9 @@ test "init returns value when key matches" {
         .route_pattern = "/users/:id",
     };
 
-    const param = RouteParam("id").fromContext(test_ctx);
-    const result = param.result catch {
-        try testing.expect(false);
-        return;
-    };
-
-    try testing.expectEqualStrings("42", result.?);
+    const param = try RouteParam("id").init(test_ctx);
+    try testing.expectEqualStrings("id", param.name);
+    try testing.expectEqualStrings("42", param.value.?);
 }
 
 test "extract returns null when key is absent" {
@@ -147,13 +144,8 @@ test "extract returns null when key is absent" {
         .route_pattern = "/accounts/:name",
     };
 
-    const param = RouteParam("id").fromContext(test_ctx);
-    const result = param.result catch {
-        try testing.expect(false);
-        return;
-    };
-
-    try testing.expect(result == null);
+    const param = try RouteParam("id").init(test_ctx);
+    try testing.expect(param.value == null);
 }
 
 test "extract resolves multiple params from one pattern" {
@@ -179,20 +171,12 @@ test "extract resolves multiple params from one pattern" {
         .raw_req = &http_req,
         .route_pattern = "/teams/:team_id/users/:user_id",
     };
-    const team_id = RouteParam("team_id").fromContext(test_ctx);
-    const user_id = RouteParam("user_id").fromContext(test_ctx);
 
-    const team_id_result = team_id.result catch {
-        try testing.expect(false);
-        return;
-    };
-    const user_id_result = user_id.result catch {
-        try testing.expect(false);
-        return;
-    };
+    const team_id = try RouteParam("team_id").init(test_ctx);
+    const user_id = try RouteParam("user_id").init(test_ctx);
 
-    try testing.expectEqualStrings("abc", team_id_result.?);
-    try testing.expectEqualStrings("42", user_id_result.?);
+    try testing.expectEqualStrings("abc", team_id.value.?);
+    try testing.expectEqualStrings("42", user_id.value.?);
 }
 
 test "extract returns decoded segment" {
@@ -218,12 +202,8 @@ test "extract returns decoded segment" {
         .raw_req = &http_req,
         .route_pattern = "/blocks/:name",
     };
-    const name_param = RouteParam("name").fromContext(test_ctx);
-    const result = name_param.result catch {
-        try testing.expect(false);
-        return;
-    };
-    try testing.expectEqualStrings("hello world", result.?);
+    const param = try RouteParam("name").init(test_ctx);
+    try testing.expectEqualStrings("hello world", param.value.?);
 }
 
 test "extract returns original segment on malformed percent escape" {
@@ -249,12 +229,9 @@ test "extract returns original segment on malformed percent escape" {
         .raw_req = &http_req,
         .route_pattern = "/blocks/:name",
     };
-    const name_param = RouteParam("name").fromContext(test_ctx);
-    const result = name_param.result catch {
-        try testing.expect(false);
-        return;
-    };
-    try testing.expectEqualStrings("hello%2", result.?);
+
+    const param = try RouteParam("name").init(test_ctx);
+    try testing.expectEqualStrings("hello%2", param.value.?);
 }
 
 test "extract returns null when route pattern is missing" {
@@ -280,12 +257,8 @@ test "extract returns null when route pattern is missing" {
         .raw_req = &http_req,
         .route_pattern = null,
     };
-    const id_param = RouteParam("id").fromContext(test_ctx);
-    const result = id_param.result catch {
-        try testing.expect(false);
-        return;
-    };
-    try testing.expectEqual(null, result);
+    const param = try RouteParam("id").init(test_ctx);
+    try testing.expectEqual(null, param.value);
 }
 
 test "extract strips query from target and route pattern" {
@@ -311,10 +284,7 @@ test "extract strips query from target and route pattern" {
         .raw_req = &http_req,
         .route_pattern = "/users/:id?unused=true",
     };
-    const id_param = RouteParam("id").fromContext(test_ctx);
-    const result = id_param.result catch {
-        try testing.expect(false);
-        return;
-    };
-    try testing.expectEqualStrings("42", result.?);
+
+    const param = try RouteParam("id").init(test_ctx);
+    try testing.expectEqualStrings("42", param.value.?);
 }
