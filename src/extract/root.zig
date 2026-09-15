@@ -1,9 +1,9 @@
 /// Creates a `Json` extractor type.
 ///
 /// The resulting extractor struct contains:
-/// - `result`: `JsonError!T`
+/// - `value`: `T`
 ///
-/// `result` is successful when request validation and JSON parsing succeed.
+/// `init` is successful when request validation and JSON parsing succeed.
 /// Validation requires:
 /// - a method that supports request bodies,
 /// - `Content-Type: application/json`,
@@ -12,7 +12,7 @@
 ///
 /// The extractor can be used either:
 /// - as a router handler parameter (automatic injection), or
-/// - manually inside a handler body with `Json(T).init(ctx)`.
+/// - manually inside a handler body with `try Json(T).init(ctx)`.
 ///
 /// ```zig
 /// const Person = struct {
@@ -21,10 +21,7 @@
 /// };
 ///
 /// fn handleRequest(ctx: Context, person: Json(Person)) !Response {
-///     const payload = person.result catch |e| {
-///         // Handle JSON or validation error.
-///         return Response.text(ctx.req_arena, .bad_request, @errorName(e), null);
-///     };
+///     const payload = person.value;
 ///
 ///     _ = payload;
 ///     return Response.ok(ctx.req_arena, null, null);
@@ -35,23 +32,20 @@ pub const Json = @import("json.zig").Json;
 /// Creates a `Query` extractor type for a single query parameter.
 ///
 /// The resulting extractor struct contains:
-/// - `result`: `QueryError!?[]const u8`
+/// - `value`: `?[]const u8`
 ///
-/// `result` semantics:
-/// - `error`: malformed percent-encoding or allocator failure while decoding
+/// `value` semantics:
 /// - `null`: query string missing, parameter missing, or parameter present with an empty value
 /// - `[]const u8`: decoded parameter value
 ///
 /// Parameter-name matching is case-insensitive and compares against the decoded key.
 /// The extractor can be used either:
 /// - as a router handler parameter (automatic injection), or
-/// - manually inside a handler body with `Query(name).init(ctx)`.
+/// - manually inside a handler body with `try Query(name).init(ctx)`.
 ///
 /// ```zig
 /// fn handleRequest(ctx: Context, filter: Query("filter")) !Response {
-///     const maybe_filter = filter.result catch |e| {
-///         return Response.text(ctx.req_arena, .bad_request, @errorName(e), null);
-///     };
+///     const maybe_filter = filter.value;
 ///
 ///     _ = maybe_filter;
 ///     return Response.ok(ctx.req_arena, null, null);
@@ -65,16 +59,15 @@ pub const Query = @import("query.zig").Query;
 /// Field names are matched case-insensitively against query keys.
 ///
 /// The resulting extractor struct contains:
-/// - `result`: `QueryError!?*T`
+/// - `value`: `?*T`
 ///
-/// `result` semantics:
-/// - `error`: malformed percent-encoding or allocator failure
+/// `value` semantics:
 /// - `null`: request target has no query string
 /// - `*T`: allocated struct with each field set from matching query keys (unmatched fields are `null`)
 ///
 /// The extractor can be used either:
 /// - as a router handler parameter (automatic injection), or
-/// - manually inside a handler body with `TypedQuery(T).init(ctx)`.
+/// - manually inside a handler body with `try TypedQuery(T).init(ctx)`.
 ///
 /// ```zig
 /// const Filter = struct {
@@ -83,9 +76,7 @@ pub const Query = @import("query.zig").Query;
 /// };
 ///
 /// fn handleRequest(ctx: Context, filter: TypedQuery(Filter)) !Response {
-///     const maybe_filter = filter.result catch |e| {
-///         return Response.text(ctx.req_arena, .bad_request, @errorName(e), null);
-///     };
+///     const maybe_filter = filter.value;
 ///
 ///     _ = maybe_filter;
 ///     return Response.ok(ctx.req_arena, null, null);
@@ -96,13 +87,13 @@ pub const TypedQuery = @import("typed_query.zig").TypedQuery;
 /// Creates a `WebSocket` extractor.
 ///
 /// The extractor struct contains:
-/// - `result`: `WebSocketError!Socket`
+/// - `socket`: `Socket`
 ///
 /// On success, the HTTP request is upgraded and a connected socket is available.
 ///
 /// The extractor can be used either:
 /// - as a router handler parameter (automatic injection), or
-/// - manually inside a handler body with `WebSocket{ .result = WebSocket.init(ctx) }`.
+/// - manually inside a handler body with `try WebSocket.init(ctx)`.
 ///
 /// In handlers, call `onConnected` to run your connection routine, then return `Response.empty`.
 ///
@@ -156,24 +147,21 @@ pub const RouteParam = @import("route_param.zig").RouteParam;
 /// Creates a `Form` extractor type
 ///
 /// The resulting extractor struct contains:
-/// - `result`: `FormError!*T`
+/// - `data`: `*T`
 ///
-/// `result` semantics:
-/// - `error`: parsing error (e.g., malformed multipart body, invalid percent-encoding, unsupported content type, allocator failure, etc.)
-/// - `T`: decoded form value of type `T`, where `T` is a struct with fields corresponding to form keys
+/// `init` is successful when parsing succeeds (e.g., valid multipart body, valid percent-encoding, supported content type, successful allocation, etc.)
+/// `T` is the decoded form value of type `T`, where `T` is a struct with fields corresponding to form keys.
 ///
 /// Parameter-name matching is case-insensitive and compares against the decoded key.
 /// Value decoding is single-pass (`+` -> space, `%XX` escapes decoded once).
 ///
 /// The extractor can be used either:
 /// - as a router handler parameter (automatic injection), or
-/// - manually inside a handler body with `Form(T).init(ctx)`.
+/// - manually inside a handler body with `try Form(T).init(ctx)`.
 ///
 /// ```zig
 /// fn handleRequest(ctx: Context, form: Form(Person)) !Response {
-///     const form_data = form.result catch |e| {
-///         return Response.text(ctx.req_arena, .bad_request, @errorName(e), null);
-///     };
+///     const form_data = form.data;
 ///
 ///     _ = form_data;
 ///     return Response.ok(ctx.req_arena, null, null);

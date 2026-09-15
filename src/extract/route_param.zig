@@ -63,7 +63,7 @@ fn stripQuery(target: []const u8) []const u8 {
 ///
 /// The extractor can be used either:
 /// - as a router handler parameter (automatic injection), or
-/// - manually inside a handler body with `RouteParam(name).init(ctx)`.
+/// - manually inside a handler body with `try RouteParam(name).init(ctx)`.
 ///
 /// ```zig
 /// fn handleRequest(ctx: Context, id: RouteParam("id")) !Response {

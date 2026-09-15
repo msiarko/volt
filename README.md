@@ -103,25 +103,25 @@ All extractors can be used in two ways:
 - Automatic injection as handler parameters.
 - Manual extraction inside handler bodies with `init(ctx)`.
 
-- **extract.Json(T)**: JSON extractor exposing `result: JsonError!T`.
-- **extract.Query("name")**: Query extractor exposing `result: QueryError!?[]const u8`.
-- **extract.TypedQuery(T)**: Typed-query extractor exposing `result: QueryError!?*T`.
+- **extract.Json(T)**: JSON extractor exposing `value: T`.
+- **extract.Query("name")**: Query extractor exposing `value: ?[]const u8`.
+- **extract.TypedQuery(T)**: Typed-query extractor exposing `value: ?*T`.
 - **extract.Header("name")**: Extracts a single HTTP header by name as `value: ?[]const u8`.
 - **extract.RouteParam("name")**: Extracts a named path segment from parametric routes (e.g., `/users/:id`) as `value: ?[]const u8`.
-- **extract.Form(T)**: Form extractor exposing `result: FormError!T`.
-- **extract.WebSocket**: Handles WebSocket upgrade requests and connection handoff via `result: WebSocketError!std.http.Server.WebSocket`.
+- **extract.Form(T)**: Form extractor exposing `data: *T`.
+- **extract.WebSocket**: Handles WebSocket upgrade requests and connection handoff via `socket: std.http.Server.WebSocket`.
 
 ### Custom Extractors
 
-You can easily define custom extractors for your application. Any `struct` or `union` type `T` acts as a custom extractor in Volt if it follows the extractor convention:
+You can easily define custom extractors for your application. Any `struct` type `T` acts as a custom extractor in Volt if it follows the extractor convention:
 
 ```zig
-pub fn fromContext(ctx: volt.Context) T
+pub fn init(ctx: volt.Context) !T
 ```
 
-Specifically, the `fromContext` method must take a single `volt.Context` argument and return the extractor type `T` itself (i.e. `@This()`).
+Specifically, the `init` method must take a single `volt.Context` argument and return an error union with the extractor type `T` itself (i.e. `!@This()`).
 
-When Volt resolves route handler parameters at compile time, if a parameter type defines `pub fn fromContext(ctx: volt.Context) T`, Volt automatically recognizes it as an extractor and calls `fromContext(ctx)` at request time, injecting the returned instance directly into the handler parameter.
+When Volt resolves route handler parameters at compile time, if a parameter type defines `pub fn init(ctx: volt.Context) !T`, Volt automatically recognizes it as an extractor and calls `init(ctx)` at request time, injecting the returned instance directly into the handler parameter. If `init` returns an error, Volt automatically returns a `400 Bad Request` response with the error name.
 
 #### Example: Custom Bearer Token Extractor
 
@@ -129,7 +129,7 @@ When Volt resolves route handler parameters at compile time, if a parameter type
 pub const BearerToken = struct {
     token: ?[]const u8,
 
-    pub fn fromContext(ctx: volt.Context) BearerToken {
+    pub fn init(ctx: volt.Context) !BearerToken {
         if (ctx.raw_req.head.headers.get("Authorization")) |auth| {
             if (std.mem.startsWith(u8, auth, "Bearer ")) {
                 return .{ .token = auth[7..] };
@@ -154,24 +154,24 @@ fn protectedProfile(
 
 #### Example: Custom Extractor with Error Handling
 
-If extraction can fail, wrap the inner payload in an error union field (e.g., `result`) inside the extractor struct:
+Volt automatically catches errors from `init` and returns a `400 Bad Request`. If you need a different status code (like `401 Unauthorized`), you can wrap the inner payload in an error union field inside the extractor struct and handle it in the router handler:
 
 ```zig
 pub const UserSession = struct {
     const SessionError = error{ InvalidHeader, ExpiredToken };
 
-    result: SessionError![]const u8,
+    value: SessionError![]const u8,
 
-    pub fn fromContext(ctx: volt.Context) UserSession {
+    pub fn init(ctx: volt.Context) !UserSession {
         const header = ctx.raw_req.head.headers.get("X-Session-ID") orelse {
-            return .{ .result = error.InvalidHeader };
+            return .{ .value = error.InvalidHeader };
         };
 
         if (std.mem.eql(u8, header, "expired")) {
-            return .{ .result = error.ExpiredToken };
+            return .{ .value = error.ExpiredToken };
         }
 
-        return .{ .result = header };
+        return .{ .value = header };
     }
 };
 
@@ -179,7 +179,7 @@ fn userDashboard(
     ctx: volt.Context,
     session: UserSession,
 ) !volt.Response {
-    const session_id = session.result catch |err| {
+    const session_id = session.value catch |err| {
         return volt.Response.text(ctx.req_arena, .unauthorized, @errorName(err), null);
     };
 
@@ -195,7 +195,7 @@ fn createUserManual(ctx: volt.Context, state: AppState) !volt.Response {
 
     const user = try volt.extract.Json(CreateUserRequest).init(ctx);
 
-    return volt.Response.text(ctx.req_arena, .ok, user.name, null);
+    return volt.Response.text(ctx.req_arena, .ok, user.value.name, null);
 }
 ```
 
@@ -228,9 +228,7 @@ fn createUser(
 ) !volt.Response {
     _ = state;
 
-    const user = user_data.result catch |err| {
-        return volt.Response.text(ctx.req_arena, .bad_request, @errorName(err), null);
-    };
+    const user = user_data.value;
 
     // Process user creation...
     return volt.Response.json(ctx.req_arena, .created, "{\"id\": 123}", null);
@@ -261,19 +259,17 @@ Behavior notes:
 
 - Query values are URL-decoded (`%XX` and `+` as space). Decoding is single-pass only; double-encoded inputs are decoded once.
 - Handler extractor field:
-    - `result`: `QueryError!?[]const u8`
+    - `value`: `?[]const u8`
 
 ```zig
-fn findUser(
+fn getUser(
     ctx: volt.Context,
     state: AppState,
     user_id: volt.extract.Query("id")
 ) !volt.Response {
     _ = state;
 
-    const id = user_id.result catch |err| {
-        return volt.Response.text(ctx.req_arena, .bad_request, @errorName(err), null);
-    } orelse return volt.Response.text(
+    const id = user_id.value orelse return volt.Response.text(
         ctx.req_arena,
         .bad_request,
         "Missing query parameter: id",
@@ -368,7 +364,7 @@ Behavior notes:
 - TypedQuery matches query parameter names directly to struct field names (encoded names are not matched).
 - TypedQuery applies single-pass URL decoding to matched values (`%XX` and `+` as space).
 - Handler extractor field:
-    - `result`: `QueryError!?*T`
+    - `value`: `?*T`
 
 ```zig
 const UserFilters = struct {
@@ -384,9 +380,7 @@ fn listUsers(
 ) !volt.Response {
     _ = state;
 
-    const filters = filters_query.result catch |err| {
-        return volt.Response.text(ctx.req_arena, .bad_request, @errorName(err), null);
-    } orelse return volt.Response.text(ctx.req_arena, .ok, "No filters provided", null);
+    const filters = filters_query.value orelse return volt.Response.text(ctx.req_arena, .ok, "No filters provided", null);
 
     if (filters.name) |name| {
         return volt.Response.text(ctx.req_arena, .ok, name, null);
@@ -482,9 +476,7 @@ fn indexHandler(ctx: volt.Context, state: *AppState) !volt.Response {
 fn echoHandler(ctx: volt.Context, state: *AppState, body: volt.extract.Json(EchoRequest)) !volt.Response {
     _ = state;
 
-    const request = body.result catch |err| {
-        return .text(ctx.req_arena, .bad_request, @errorName(err), null);
-    };
+    const request = body.value;
 
     return .text(ctx.req_arena, .ok, request.message, null);
 }
