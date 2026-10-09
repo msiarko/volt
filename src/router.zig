@@ -2,26 +2,19 @@ const std = @import("std");
 const Request = std.http.Server.Request;
 const Allocator = std.mem.Allocator;
 const HttpRequest = std.http.Server.Request;
-const core = @import("core");
-const Context = core.Context;
-const Response = core.Response;
+const Context = @import("core/Context.zig");
+const Response = @import("core/Response.zig");
 const ArgsTuple = std.meta.ArgsTuple;
 const log = std.log;
-const extractor = @import("extractor.zig");
-const volt_options = @import("options");
-
-const middleware = if (volt_options.middleware_enabled) @import("middleware/root.zig") else void;
-const Middleware = if (volt_options.middleware_enabled) middleware.Middleware else void;
-const Next = if (volt_options.middleware_enabled) middleware.Next else void;
+const isExtractor = @import("extract/root.zig").isExtractor;
+const middleware = @import("middleware/root.zig");
+const Middleware = middleware.Middleware;
+const Next = middleware.Next;
 
 pub fn Router(comptime Config: anytype) type {
     const config_info = @typeInfo(@TypeOf(Config));
     const State = if (config_info == .type) Config else Config[0];
     const mws = if (config_info == .type) .{} else Config[1];
-
-    if (comptime !volt_options.middleware_enabled and mws.len > 0) {
-        @compileError("Built-in middleware features are not enabled: set 'middleware_enabled' option to 'true' in volt's dependency import");
-    }
 
     return struct {
         const Self = @This();
@@ -47,7 +40,7 @@ pub fn Router(comptime Config: anytype) type {
                                 Context => args[i] = ctx,
                                 State => args[i] = state,
                                 else => |Arg| {
-                                    if (comptime extractor.isExtractor(Arg)) {
+                                    if (comptime isExtractor(Arg)) {
                                         args[i] = Arg.init(ctx) catch |err|
                                             return .badRequest(ctx.req_arena, @errorName(err), null);
                                     } else {
@@ -529,7 +522,7 @@ pub fn Router(comptime Config: anytype) type {
                 @compileError("handler must return !Response");
             }
 
-            if (comptime volt_options.middleware_enabled and mws.len > 0) {
+            if (comptime mws.len > 0) {
                 const Chained = middleware.Chain(State, mws, handler);
                 return .init(@TypeOf(Chained.exec), @ptrCast(&Chained.exec));
             }
@@ -808,8 +801,6 @@ test "router duplicates route path keys on registration" {
 }
 
 test "middleware executes in order and modifies response header" {
-    if (comptime !volt_options.middleware_enabled) return;
-
     const mw = struct {
         fn addHeader(ctx: *Context, next: *Next) !Response {
             var res = try next.exec(ctx);
@@ -842,8 +833,6 @@ test "middleware executes in order and modifies response header" {
 }
 
 test "built-in requestId and cors middlewares" {
-    if (comptime !volt_options.middleware_enabled) return;
-
     var router: Router(.{ void, .{ middleware.requestId, middleware.cors } }) = .init(std.testing.allocator, {});
     defer router.deinit(std.testing.allocator);
 
@@ -868,8 +857,6 @@ test "built-in requestId and cors middlewares" {
 }
 
 test "recovery middleware intercepts error and returns 500" {
-    if (comptime !volt_options.middleware_enabled) return;
-
     var router: Router(.{ void, .{middleware.recovery} }) = .init(std.testing.allocator, {});
     defer router.deinit(std.testing.allocator);
 
@@ -893,8 +880,6 @@ test "recovery middleware intercepts error and returns 500" {
 }
 
 test "comptime static middleware chain" {
-    if (comptime !volt_options.middleware_enabled) return;
-
     var router: Router(void) = .init(std.testing.allocator, {});
     defer router.deinit(std.testing.allocator);
 

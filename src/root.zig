@@ -57,7 +57,7 @@ pub const Server = @import("Server.zig");
 ///     return Response.json(ctx.req_arena, .ok, "success", null);
 /// }
 /// ```
-pub const Context = @import("core").Context;
+pub const Context = @import("core/Context.zig");
 
 /// HTTP response type used by handlers.
 ///
@@ -75,7 +75,7 @@ pub const Context = @import("core").Context;
 /// // For flows that already wrote to the socket (e.g. WebSocket upgrade)
 /// return Response.empty;
 /// ```
-pub const Response = @import("core").Response;
+pub const Response = @import("core/Response.zig");
 
 /// Creates a generic HTTP router type parameterized by application state.
 ///
@@ -107,8 +107,6 @@ pub const Response = @import("core").Response;
 /// ```
 pub const Router = @import("router.zig").Router;
 
-const options = @import("options");
-
 /// Extractors for request parameters, headers, and body content.
 ///
 /// Example usage:
@@ -121,34 +119,17 @@ const options = @import("options");
 ///     return Response.ok(ctx.req_arena, null, null);
 /// }
 /// ```
-pub const extract = if (options.extract_enabled)
-    @import("extract")
-else
-    @compileError("Built-in extractors are not enabled: set 'extract_enabled' option to 'true' in volt's dependency import");
-
-pub const testing = if (options.testing_enabled)
-    if (!@import("builtin").is_test) {
-        @compileError("Testing features work only in 'test' blocks");
-    } else @import("testing/client.zig")
-else
-    @compileError("Testing features are not enabled: set 'testing_enabled' option to 'true' in volt's dependency import");
-
-pub const middleware = if (options.middleware_enabled)
-    @import("middleware/root.zig")
-else
-    @compileError("Built-in middleware features are not enabled: set 'middleware_enabled' option to 'true' in volt's dependency import");
+pub const extract = @import("extract/root.zig");
+pub const testing = @import("testing/client.zig");
+pub const middleware = @import("middleware/root.zig");
 
 test {
     const refAllDecls = @import("std").testing.refAllDecls;
     _ = refAllDecls(Server);
     _ = refAllDecls(@import("router.zig"));
-    if (options.extract_enabled) {
-        _ = refAllDecls(@import("extractor.zig"));
-    }
-    if (options.testing_enabled) {
-        _ = refAllDecls(@import("testing/client.zig"));
-    }
-    if (options.middleware_enabled) {
-        _ = refAllDecls(@import("middleware/root.zig"));
-    }
+    _ = refAllDecls(Context);
+    _ = refAllDecls(Response);
+    _ = refAllDecls(testing);
+    _ = refAllDecls(middleware);
+    _ = refAllDecls(extract);
 }

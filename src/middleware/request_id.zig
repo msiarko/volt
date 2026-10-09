@@ -1,7 +1,6 @@
 const std = @import("std");
-const core = @import("core");
-const Context = core.Context;
-const Response = core.Response;
+const Context = @import("../core/Context.zig");
+const Response = @import("../core/Response.zig");
 const Next = @import("root.zig").Next;
 
 var request_counter: std.atomic.Value(u64) = std.atomic.Value(u64).init(1);

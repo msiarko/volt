@@ -1,7 +1,7 @@
 const std = @import("std");
-const core = @import("core");
-const Context = core.Context;
-const Response = core.Response;
+const Context = @import("../core/Context.zig");
+const Response = @import("../core/Response.zig");
+const isExtractor = @import("../extract/root.zig").isExtractor;
 
 pub const logger = @import("logger.zig").logger;
 pub const cors = @import("cors.zig").cors;
@@ -145,7 +145,7 @@ pub fn Chain(comptime State: type, comptime mws: anytype, comptime handler: anyt
                     Context => args[i] = ctx.*,
                     State => args[i] = state,
                     else => |Arg| {
-                        if (comptime @import("../extractor.zig").isExtractor(Arg)) {
+                        if (comptime isExtractor(Arg)) {
                             args[i] = Arg.fromContext(ctx.*);
                         } else {
                             @compileError("unable to resolve parameter of type " ++ @typeName(field_type));

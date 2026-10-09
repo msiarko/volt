@@ -4,7 +4,7 @@ const Allocator = std.mem.Allocator;
 const AllocatorError = std.mem.Allocator.Error;
 const Request = std.http.Server.Request;
 
-const Context = @import("core").Context;
+const Context = @import("../core/Context.zig");
 const url = @import("url.zig");
 
 fn extract(

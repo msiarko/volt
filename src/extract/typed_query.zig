@@ -4,7 +4,7 @@ const AllocatorError = std.mem.Allocator.Error;
 const Request = std.http.Server.Request;
 
 const url = @import("url.zig");
-const Context = @import("core").Context;
+const Context = @import("../core/Context.zig");
 const QueryIterator = @import("QueryIterator.zig");
 
 const TypedQueryError = AllocatorError || url.ParseError;

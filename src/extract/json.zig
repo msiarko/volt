@@ -5,7 +5,7 @@ const AllocatorError = std.mem.Allocator.Error;
 const ReaderError = std.Io.Reader.Error;
 const ParseError = std.json.ParseError(std.json.Scanner);
 
-const Context = @import("core").Context;
+const Context = @import("../core/Context.zig");
 
 fn extract(comptime T: type, arena: Allocator, req: *Request) JsonError!T {
     if (!req.head.method.requestHasBody()) {

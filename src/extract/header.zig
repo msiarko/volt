@@ -3,7 +3,7 @@ const Request = std.http.Server.Request;
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
-const Context = @import("core").Context;
+const Context = @import("../core/Context.zig");
 
 fn extract(comptime name: []const u8, req: *Request) Header(name) {
     var header_it = req.iterateHeaders();

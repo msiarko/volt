@@ -6,7 +6,7 @@ const WebSocket = std.http.Server.WebSocket;
 const WriterError = std.Io.Writer.Error;
 const ExpectedContinueError = std.http.Server.Request.ExpectContinueError;
 
-const Context = @import("core").Context;
+const Context = @import("../core/Context.zig");
 
 pub const WebSocketUpgradeError = error{
     WebSocketKeyMissing,

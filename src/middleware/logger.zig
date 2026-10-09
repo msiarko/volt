@@ -1,7 +1,6 @@
 const std = @import("std");
-const core = @import("core");
-const Context = core.Context;
-const Response = core.Response;
+const Context = @import("../core/Context.zig");
+const Response = @import("../core/Response.zig");
 const Next = @import("root.zig").Next;
 
 /// Built-in Logger Middleware.
@@ -15,7 +14,7 @@ pub fn logger(ctx: *Context, next: *Next) anyerror!Response {
         return err;
     };
 
-    const status_code: u16 = if (res.attributes) |attr| @intFromEnum(attr.status) else 200;
+    const status_code: u16 = if (res.attributes) |attr| @backingInt(attr.status) else 200;
     std.log.info("{s} {s} {d}", .{ @tagName(method), target, status_code });
     return res;
 }

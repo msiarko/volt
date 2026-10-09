@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const AllocatorError = std.mem.Allocator.Error;
 const ReadAllocError = std.Io.Reader.ReadAllocError;
-const Context = @import("core").Context;
+const Context = @import("../core/Context.zig");
 const url = @import("url.zig");
 const Request = std.http.Server.Request;
 

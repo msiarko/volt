@@ -1,6 +1,6 @@
 const std = @import("std");
 const Router = @import("../router.zig").Router;
-const Response = @import("core").Response;
+const Response = @import("../core/Response.zig");
 
 pub fn Client(comptime Arg: type) type {
     const RouterType = comptime type_block: {
@@ -145,7 +145,7 @@ pub fn Client(comptime Arg: type) type {
 
 test "Client dispatches GET requests" {
     const testing = std.testing;
-    const Context = @import("core").Context;
+    const Context = @import("../core/Context.zig");
 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -172,7 +172,7 @@ test "Client dispatches GET requests" {
 
 test "Client dispatches POST requests" {
     const testing = std.testing;
-    const Context = @import("core").Context;
+    const Context = @import("../core/Context.zig");
 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -199,7 +199,7 @@ test "Client dispatches POST requests" {
 
 test "Client dispatches PUT requests" {
     const testing = std.testing;
-    const Context = @import("core").Context;
+    const Context = @import("../core/Context.zig");
 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -226,7 +226,7 @@ test "Client dispatches PUT requests" {
 
 test "Client dispatches PATCH requests" {
     const testing = std.testing;
-    const Context = @import("core").Context;
+    const Context = @import("../core/Context.zig");
 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -253,7 +253,7 @@ test "Client dispatches PATCH requests" {
 
 test "Client dispatches DELETE requests" {
     const testing = std.testing;
-    const Context = @import("core").Context;
+    const Context = @import("../core/Context.zig");
 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -297,7 +297,7 @@ test "Client returns 404 for nonexistent routes" {
 
 test "Client returns 405 for disallowed methods" {
     const testing = std.testing;
-    const Context = @import("core").Context;
+    const Context = @import("../core/Context.zig");
 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -323,7 +323,7 @@ test "Client returns 405 for disallowed methods" {
 
 test "Client dispatches large request payload" {
     const testing = std.testing;
-    const Context = @import("core").Context;
+    const Context = @import("../core/Context.zig");
 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
