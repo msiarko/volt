@@ -189,7 +189,7 @@ pub fn isExtractor(comptime T: type) bool {
     return false;
 }
 
-test "extractor returns true for a struct with a fromContext method and returns Extractor type" {
+test "extractor returns true for a struct with an init method and returns Extractor type" {
     const std = @import("std");
 
     const TestExtractor = struct {
@@ -202,7 +202,7 @@ test "extractor returns true for a struct with a fromContext method and returns 
     try std.testing.expect(isExtractor(TestExtractor));
 }
 
-test "extractor returns false for a struct without a fromContext method" {
+test "extractor returns false for a struct without an init method" {
     const std = @import("std");
 
     const NonExtractor = struct {
@@ -212,11 +212,11 @@ test "extractor returns false for a struct without a fromContext method" {
     try std.testing.expect(!isExtractor(NonExtractor));
 }
 
-test "extractor returns false if fromContext return type that is not an extractor itself" {
+test "extractor returns false if init return type that is not an extractor itself" {
     const std = @import("std");
 
     const NonExtractor = struct {
-        pub fn fromContext(ctx: Context) !u8 {
+        pub fn init(ctx: Context) !u8 {
             _ = ctx;
             return 5;
         }

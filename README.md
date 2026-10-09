@@ -586,8 +586,6 @@ This is an early-stage library. While the core routing and WebSocket functionali
 
 ### Planned Features
 
-- **Feature Flags**: Build-time feature flags in `build.zig` to include only selected features and reduce final binary size when unused features are disabled.
-
 - **SSL/TLS Support**: Secure HTTPS connections
 
 - **Enhanced Error Handling**: More comprehensive error types and better error messages
