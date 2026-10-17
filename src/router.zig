@@ -44,17 +44,20 @@ pub fn Router(comptime Config: anytype) type {
                                     const is_optional = ty == .optional;
                                     const T = if (is_optional) ty.optional.child else Arg;
                                     if (comptime isExtractor(T)) {
-                                        args[i] = T.init(ctx) catch |err| {
-                                            if (is_optional) {
-                                                args[i] = null;
-                                                return;
-                                            }
+                                        args[i] = blk: {
+                                            const val = T.init(ctx) catch |err| {
+                                                if (is_optional) {
+                                                    break :blk null;
+                                                } else {
+                                                    return .badRequest(
+                                                        ctx.req_arena,
+                                                        T.errorMessage(err),
+                                                        null,
+                                                    );
+                                                }
+                                            };
 
-                                            return .badRequest(
-                                                ctx.req_arena,
-                                                T.errorMessage(err),
-                                                null,
-                                            );
+                                            break :blk val;
                                         };
                                     } else {
                                         @compileError("unable to resolve parameter of type " ++ @typeName(field_type));
