@@ -35,6 +35,12 @@ pub fn Query(comptime name: []const u8) type {
         pub fn init(ctx: Context) AllocatorError!Self {
             return .{ .value = try extract(name, ctx.req_arena, ctx.raw_req) };
         }
+
+        pub fn errorMessage(err: AllocatorError) []const u8 {
+            return switch (err) {
+                AllocatorError.OutOfMemory => "Out of memory",
+            };
+        }
     };
 }
 
@@ -240,4 +246,10 @@ test "init matches decoded key name case-insensitively" {
     };
     try testing.expect(query.value != null);
     try testing.expectEqualStrings("Ana", query.value.?);
+}
+
+test "init returns error when memory allocation fails" {
+    const err = AllocatorError.OutOfMemory;
+    const msg = Query("query").errorMessage(err);
+    try std.testing.expectEqualStrings("Out of memory", msg);
 }

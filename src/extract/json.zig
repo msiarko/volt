@@ -56,6 +56,18 @@ pub fn Json(comptime T: type) type {
         pub fn init(ctx: Context) JsonError!Self {
             return .{ .value = try extract(T, ctx.req_arena, ctx.raw_req) };
         }
+
+        pub fn errorMessage(err: JsonError) []const u8 {
+            return switch (err) {
+                RequestValidationError.RequestBodyMissing => "Request body is missing",
+                RequestValidationError.ContentTypeMissing => "Missing Content-Type header",
+                RequestValidationError.InvalidContentType => "Invalid Content-Type header, expected 'application/json'",
+                RequestValidationError.ContentLengthMissing => "Missing Content-Length header",
+                RequestValidationError.EmptyRequestBody => "Request body is empty",
+                ReaderError.EndOfStream => "Unexpected end of input while reading request body",
+                else => |e| @errorName(e),
+            };
+        }
     };
 }
 
@@ -311,4 +323,16 @@ test "init surfaces parse errors for invalid JSON" {
 
     // If init unexpectedly succeeded, fail the test
     try testing.expect(false);
+}
+
+test "errorMessage returns correct message for RequestValidationError" {
+    const err = RequestValidationError.ContentTypeMissing;
+    const msg = Json(@This()).errorMessage(err);
+    try std.testing.expectEqualStrings("Missing Content-Type header", msg);
+}
+
+test "errorMessage returns correct message for ReaderError" {
+    const err = ReaderError.EndOfStream;
+    const msg = Json(@This()).errorMessage(err);
+    try std.testing.expectEqualStrings("Unexpected end of input while reading request body", msg);
 }

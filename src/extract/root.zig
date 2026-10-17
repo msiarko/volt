@@ -170,12 +170,17 @@ pub const RouteParam = @import("route_param.zig").RouteParam;
 /// ```
 pub const Form = @import("form.zig").Form;
 
-const method_name = "init";
+const init_method = "init";
+const error_method = "errorMessage";
 
 pub fn isExtractor(comptime T: type) bool {
     if (@typeInfo(T) != .@"struct") return false;
-    if (@hasDecl(T, method_name)) {
-        const info = @typeInfo(@TypeOf(@field(T, method_name)));
+    return hasInitMethod(T) and hasErrorMessageMethod(T);
+}
+
+fn hasInitMethod(comptime T: type) bool {
+    if (@hasDecl(T, init_method)) {
+        const info = @typeInfo(@TypeOf(@field(T, init_method)));
         if (info != .@"fn") return false;
         const init = info.@"fn";
         const Ret = init.return_type orelse return false;
@@ -189,6 +194,19 @@ pub fn isExtractor(comptime T: type) bool {
     return false;
 }
 
+fn hasErrorMessageMethod(comptime T: type) bool {
+    if (@hasDecl(T, error_method)) {
+        const info = @typeInfo(@TypeOf(@field(T, error_method)));
+        if (info != .@"fn") return false;
+        const error_fn = info.@"fn";
+        return error_fn.param_types.len == 1 and
+            @typeInfo(error_fn.param_types[0] orelse false) == .error_set and
+            error_fn.return_type orelse false == []const u8;
+    }
+
+    return false;
+}
+
 test "extractor returns true for a struct with an init method and returns Extractor type" {
     const std = @import("std");
 
@@ -196,6 +214,11 @@ test "extractor returns true for a struct with an init method and returns Extrac
         pub fn init(ctx: Context) !@This() {
             _ = ctx;
             return .{};
+        }
+
+        pub fn errorMessage(err: error{}) []const u8 {
+            _ = err;
+            return "error";
         }
     };
 

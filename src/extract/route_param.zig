@@ -88,6 +88,12 @@ pub fn RouteParam(comptime name: []const u8) type {
                 ctx.raw_req,
             ) };
         }
+
+        pub fn errorMessage(err: AllocatorError) []const u8 {
+            return switch (err) {
+                AllocatorError.OutOfMemory => "Out of memory",
+            };
+        }
     };
 }
 
@@ -287,4 +293,10 @@ test "extract strips query from target and route pattern" {
 
     const param = try RouteParam("id").init(test_ctx);
     try testing.expectEqualStrings("42", param.value.?);
+}
+
+test "errorMessage returns correct message for AllocatorError" {
+    const err = AllocatorError.OutOfMemory;
+    const msg = RouteParam("id").errorMessage(err);
+    try std.testing.expectEqualStrings("Out of memory", msg);
 }

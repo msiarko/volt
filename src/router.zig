@@ -40,9 +40,22 @@ pub fn Router(comptime Config: anytype) type {
                                 Context => args[i] = ctx,
                                 State => args[i] = state,
                                 else => |Arg| {
-                                    if (comptime isExtractor(Arg)) {
-                                        args[i] = Arg.init(ctx) catch |err|
-                                            return .badRequest(ctx.req_arena, @errorName(err), null);
+                                    const ty = @typeInfo(Arg);
+                                    const is_optional = ty == .optional;
+                                    const T = if (is_optional) ty.optional.child else Arg;
+                                    if (comptime isExtractor(T)) {
+                                        args[i] = T.init(ctx) catch |err| {
+                                            if (is_optional) {
+                                                args[i] = null;
+                                                return;
+                                            }
+
+                                            return .badRequest(
+                                                ctx.req_arena,
+                                                T.errorMessage(err),
+                                                null,
+                                            );
+                                        };
                                     } else {
                                         @compileError("unable to resolve parameter of type " ++ @typeName(field_type));
                                     }
@@ -78,7 +91,7 @@ pub fn Router(comptime Config: anytype) type {
             const Self = @This();
 
             pattern: []const u8,
-            segments: []Segment,
+            segments: []const Segment,
             literal_count: usize,
             entry: Route,
 
@@ -428,7 +441,7 @@ pub fn Router(comptime Config: anytype) type {
                 }
 
                 const parsed = try parseSegments(allocator, path);
-                errdefer allocator.free(parsed.segments);
+                errdefer allocator.free(parsed.items);
 
                 const owned_pattern = try allocator.dupe(u8, path);
                 errdefer allocator.free(owned_pattern);
@@ -448,7 +461,7 @@ pub fn Router(comptime Config: anytype) type {
 
                 try self.parametric_routes.insert(allocator, insert_index, .{
                     .pattern = owned_pattern,
-                    .segments = parsed.segments,
+                    .segments = parsed.items,
                     .literal_count = parsed.literal_count,
                     .entry = entry,
                 });
@@ -476,7 +489,12 @@ pub fn Router(comptime Config: anytype) type {
             } else false;
         }
 
-        fn parseSegments(allocator: Allocator, pattern: []const u8) !struct { segments: []Segment, literal_count: usize } {
+        const Segments = struct {
+            items: []const Segment,
+            literal_count: usize,
+        };
+
+        fn parseSegments(allocator: Allocator, pattern: []const u8) !Segments {
             const path = if (pattern.len > 0 and pattern[0] == '/') pattern[1..] else pattern;
             var it = std.mem.splitScalar(u8, path, '/');
             var list: std.ArrayListUnmanaged(Segment) = .empty;
@@ -505,7 +523,7 @@ pub fn Router(comptime Config: anytype) type {
             }
 
             return .{
-                .segments = try list.toOwnedSlice(allocator),
+                .items = try list.toOwnedSlice(allocator),
                 .literal_count = literal_count,
             };
         }

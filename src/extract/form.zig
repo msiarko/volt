@@ -136,6 +136,20 @@ pub fn Form(comptime T: type) type {
         pub fn init(ctx: Context) FormError!Self {
             return .{ .data = try extract(T, ctx.req_arena, ctx.raw_req) };
         }
+
+        pub fn errorMessage(err: FormError) []const u8 {
+            return switch (err) {
+                FormError.MissingContentType => "Missing Content-Type header",
+                FormError.MissingContentLength => "Missing Content-Length header",
+                FormError.EmptyBody => "Request body is empty",
+                FormError.MalformedMultipartBody => "Malformed multipart/form-data body",
+                FormError.MissingBoundary => "Missing boundary in multipart/form-data Content-Type",
+                FormError.UnsupportedContentType => "Unsupported Content-Type for form data",
+                FormError.EmptyFormDataKey => "Empty key in form data",
+                FormError.EmptyFormDataValue => "Empty value in form data",
+                else => |e| @errorName(e),
+            };
+        }
     };
 }
 
@@ -276,7 +290,7 @@ test "init returns error when content type is missing" {
         age: u8,
     };
 
-    try testing.expectError(error.MissingContentType, Form(Person).init(test_ctx));
+    try testing.expectError(FormError.MissingContentType, Form(Person).init(test_ctx));
 }
 
 test "init returns error when content length is missing" {
@@ -317,7 +331,7 @@ test "init returns error when content length is missing" {
         age: u8,
     };
 
-    try testing.expectError(error.MissingContentLength, Form(Person).init(test_ctx));
+    try testing.expectError(FormError.MissingContentLength, Form(Person).init(test_ctx));
 }
 
 test "init returns error when body is empty" {
@@ -359,5 +373,17 @@ test "init returns error when body is empty" {
         age: u8,
     };
 
-    try testing.expectError(error.EmptyBody, Form(Person).init(test_ctx));
+    try testing.expectError(FormError.EmptyBody, Form(Person).init(test_ctx));
+}
+
+test "errorMessage returns correct message for FormError" {
+    const form_error = FormError.MissingContentType;
+    const msg = Form(@This()).errorMessage(form_error);
+    try std.testing.expectEqualStrings("Missing Content-Type header", msg);
+}
+
+test "errorMessage returns correct message for AllocatorError" {
+    const form_error = AllocatorError.OutOfMemory;
+    const msg = Form(@This()).errorMessage(form_error);
+    try std.testing.expectEqualStrings("OutOfMemory", msg);
 }

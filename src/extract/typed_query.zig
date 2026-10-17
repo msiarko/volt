@@ -74,6 +74,13 @@ pub fn TypedQuery(comptime T: type) type {
         pub fn init(ctx: Context) TypedQueryError!Self {
             return .{ .value = try extract(T, ctx.req_arena, ctx.raw_req) };
         }
+
+        pub fn errorMessage(err: TypedQueryError) []const u8 {
+            return switch (err) {
+                AllocatorError.OutOfMemory => "Out of memory",
+                else => |e| @errorName(e),
+            };
+        }
     };
 }
 
@@ -318,4 +325,10 @@ test "TypedQuery.init uses last value for duplicate keys" {
     const filter = try TypedQuery(Filter).init(test_ctx);
     try testing.expect(filter.value != null);
     try testing.expectEqualStrings("bob", filter.value.?.name.?);
+}
+
+test "TypedQuery.init returns error when memory allocation fails" {
+    const err = AllocatorError.OutOfMemory;
+    const msg = TypedQuery(@This()).errorMessage(err);
+    try std.testing.expectEqualStrings("Out of memory", msg);
 }

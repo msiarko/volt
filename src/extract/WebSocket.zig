@@ -23,6 +23,15 @@ pub fn init(ctx: Context) WebSocketError!Self {
     return .{ .socket = try extract(ctx.raw_req) };
 }
 
+pub fn errorMessage(err: WebSocketError) []const u8 {
+    return switch (err) {
+        WebSocketUpgradeError.WebSocketKeyMissing => "WebSocket key missing in request",
+        WebSocketUpgradeError.NotWebSocketUpgrade => "Request is not a WebSocket upgrade",
+        ExpectedContinueError.HttpExpectationFailed => "Expect-Continue not supported for WebSocket upgrade",
+        ExpectedContinueError.WriteFailed => "Failed to write Expect-Continue response",
+    };
+}
+
 pub fn onConnected(self: *const Self, handler: anytype, args: anytype) !void {
     const args_type_info = @typeInfo(@TypeOf(args));
     if (args_type_info != .@"struct" and !args_type_info.@"struct".is_tuple) {
@@ -100,4 +109,10 @@ test "init returns NotWebSocketUpgrade for regular HTTP request" {
     };
     const ws_result = Self.init(test_ctx);
     try testing.expectEqual(WebSocketError.NotWebSocketUpgrade, ws_result);
+}
+
+test "init returns WebSocketUpgradeError.WebSocketKeyMissing for WebSocket upgrade request without key" {
+    const err = WebSocketError.WebSocketKeyMissing;
+    const msg = errorMessage(err);
+    try std.testing.expectEqualStrings("WebSocket key missing in request", msg);
 }
